@@ -1,0 +1,46 @@
+# --- Secrets (never commit) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+# Claude Code's local-only settings (may hold personal permissions)
+.claude/settings.local.json
+
+# --- Dependencies and build output ---
+node_modules/
+dist/
+app/public/viewer.js
+coverage/
+
+# --- Python (server/) ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# --- Local data ---
+# Development database (server/instance/dev.db)
+instance/
+*.db
+*.sqlite
+*.sqlite3
+# Saved test runs (generated pages, may contain paper text)
+.variety/
+# Parity corpus: generated from local .variety specs by `npm run parity`
+server/tests/parity/
+# Private audit documents
+audit/
+
+# --- Logs and editor/OS junk ---
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
