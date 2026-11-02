@@ -401,6 +401,35 @@ def test_coverage_and_layout_go_in_one_repair(monkeypatch):
     assert any('"a number"' in p for p in problems) and any("overlap" in p for p in problems)
 
 
+# ---------- worked-example checks: kept only when the section writes the number; failures join the soft repair ----------
+
+def test_checks_are_kept_only_when_the_section_writes_the_number():
+    payload = {"section": {"label": "x", "blocks": [{"index": 0, "type": "text",
+                                                   "md": "With p = 0.7 the loss is 0.36; 1,024 tokens use 36% and 1.61. Use 3 points."}]}}
+    spec = {"checks": [{"expect": v} for v in (0.357, 0.36, 1024, 0, 2.5, 1.6, 3, 3.4, 0.7)]}
+    assert [c["expect"] for c in codelab._keep_checks(spec, payload)["checks"]] == [0.357, 0.36, 1024, 3, 0.7]
+    assert codelab._keep_checks({"title": "t"}, payload) == {"title": "t"}
+
+
+def with_check(spec: dict, expect: float) -> dict:
+    out = copy.deepcopy(spec)
+    out["checks"] = [{"set": {"t": 5}, "readout": "wg", "expect": expect}]
+    return out
+
+
+@needs_node
+def test_a_failed_worked_example_check_gets_the_soft_repair_but_never_costs_the_playground(monkeypatch):
+    # the faked section (test_codelab.marked) writes no numbers, so stub the filter to keep the check
+    monkeypatch.setattr(codelab, "_keep_checks", lambda spec, payload: spec)
+    bad = with_check(GINI, 0.123)
+    report = codelab.check_playground(bad)
+    assert report["problems"] == [] and report["checks"] and "gives 0.123" in report["checks"][0]
+    result, _, _, sent, _ = run(monkeypatch, [bad, bad])
+    assert [s["step"] for s in sent] == ["playground write", "playground layout"]
+    assert sent[1]["user"]["problems"][0] == codelab.SOFT_LEAD
+    assert len(widgets(result)) == 1  # still failing after the repair: kept anyway (logged)
+
+
 # ---------- layout problems fixed by code before Haiku (_pg_layout_autofix) ----------
 
 def chart(cid: str, draw: str, **kw) -> dict:

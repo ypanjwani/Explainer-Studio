@@ -696,3 +696,41 @@ describe("playground coverage list (plan.covers)", () => {
     expect(PLAYGROUND_SYSTEM).not.toMatch(/a focused set of controls/);
   });
 });
+
+// Worked-example checks (Nov 2): spec.checks sets state as a control would, reads a readout and compares it with the
+// section's number. Soft "checks" messages, never a failure.
+describe("playground worked-example checks", () => {
+  const base = {
+    title: "Loss", state: { p: 0.5, y: 1, q: 0 },
+    components: [
+      { id: "s", type: "slider", label: "p", key: "p", min: 0.01, max: 0.99, step: 0.01 },
+      { id: "ys", type: "select", label: "label", key: "y", options: [{ value: 0, label: "0" }, { value: 1, label: "1" }], onChange: "return { y: value, q: value * 2 };" },
+      { id: "r", type: "readout", label: "Loss", value: "return -(state.y * Math.log(state.p) + (1 - state.y) * Math.log(1 - state.p));" },
+      { id: "r2", type: "readout", label: "q", value: "return String(state.q) + ' of 4';" },
+    ],
+  };
+  const run = (checks: unknown) => validate({ ...base, checks });
+
+  it("passes when the readout shows the section's number to its precision", () => {
+    expect(run([{ set: { p: 0.7, y: 1 }, readout: "r", expect: 0.36 }]).checks).toEqual([]);
+    expect(run([{ set: { y: 1 }, readout: "r2", expect: 2 }]).checks).toEqual([]);  // onChange ran (q = 2)
+  });
+
+  it("reports a readout that disagrees, without failing", () => {
+    const r = run([{ set: { p: 0.2, y: 1 }, readout: "r", expect: 0.36 }]);
+    expect(r.ok).toBe(true);
+    expect(r.checks[0]).toMatch(/with p = 0\.2, y = 1, readout r \(Loss\) shows 1\.609, but the section's worked example gives 0\.36/);
+  });
+
+  it("reports malformed checks", () => {
+    const all = run([{ set: { zz: 1 }, readout: "r", expect: 1 }, { set: { p: 0.5 }, readout: "s", expect: 1 }, { readout: "r" }]).checks.join("\n");
+    expect(all).toMatch(/"zz" is not a state key/);
+    expect(all).toMatch(/"s" is not a readout id/);
+    expect(all).toMatch(/check 3 must be/);
+  });
+
+  it("is empty without checks, and the prompt describes them", () => {
+    expect(validate(base).checks).toEqual([]);
+    expect(PLAYGROUND_SYSTEM).toMatch(/Worked-example checks:/);
+  });
+});

@@ -17,6 +17,18 @@
   const TICKS = 60;
 
   const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+  const MAX_SELF_CHECKS = 4;
+  // A readout shows `expect` when one of its numbers equals it to the precision `expect` is written with (0.36 matches
+  // 0.357 and '36%'; 2 matches 2.4). A string readout may hold several numbers (e.g. '3 / 4').
+  const decimals = (n) => { const m = String(n).match(/\.(\d+)$/); return m ? m[1].length : 0; };
+  function numberShown(shown, expect) {
+    const tol = 0.5 * 10 ** -decimals(expect) + 1e-9;
+    const near = (v) => Math.abs(v - expect) <= tol;
+    if (isNum(shown)) return near(shown) || near(shown / 100) || near(shown * 100);
+    const text = String(shown == null ? '' : shown).replace(/(\d),(?=\d{3})/g, '$1');
+    const nums = (text.match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi) || []).map(Number).filter(isNum);
+    return nums.some((v) => near(v) || (text.includes('%') && near(v / 100)));
+  }
   const isRange = (r) => Array.isArray(r) && r.length === 2 && isNum(r[0]) && isNum(r[1]) && r[0] < r[1];
   const clone = (v) => JSON.parse(JSON.stringify(v));
 
@@ -26,7 +38,8 @@
     let facts = null;
     let layout = [];  // soft layout problems (layoutProblems): reported for one repair, never a failure
     let coverage = [];  // soft: plan.covers items no component delivers (coverageProblems; Explainer Studio, Nov 2)
-    const done = () => (errors.length === 0 ? { ok: true, errors, facts, layout, coverage } : { ok: false, errors });
+    let checks = [];  // soft: worked-example self-tests whose readout disagrees (selfChecks; Explainer Studio, Nov 2)
+    const done = () => (errors.length === 0 ? { ok: true, errors, facts, layout, coverage, checks } : { ok: false, errors });
     const t0 = Date.now();
 
     // ------------------------------------------------------------ shape
@@ -222,6 +235,44 @@
         next[k] = sandbox.deepFreeze(clone(patch[k]));
       }
       return { S: Object.freeze(next), changed };
+    }
+
+    // Worked-example self-tests (spec.checks, Explainer Studio Nov 2): set state as a control would (its onChange runs),
+    // read one readout, compare with the number the section states. The server keeps only checks whose expected number
+    // is written in the section, so a check tests the playground's maths against the section, not against itself.
+    // Soft: messages go to the one soft repair; never a failure.
+    function selfChecks(spec, comps, S0) {
+      const list = Array.isArray(spec.checks) ? spec.checks.slice(0, MAX_SELF_CHECKS) : [];
+      const byId = Object.fromEntries(comps.map((c) => [c.id, c]));
+      const out = [];
+      list.forEach((ck, i) => {
+        const tag = `check ${i + 1}`;
+        if (!ck || typeof ck !== 'object' || !ck.set || typeof ck.set !== 'object' || Array.isArray(ck.set) || !isNum(ck.expect)) {
+          out.push(`${tag} must be {"set": {<state key>: <value>}, "readout": "<readout id>", "expect": <number>}`); return;
+        }
+        const ro = byId[ck.readout];
+        if (!ro || ro.type !== 'readout') { out.push(`${tag}: "${ck.readout}" is not a readout id`); return; }
+        let S = clone(S0);
+        for (const [k, v] of Object.entries(ck.set)) {
+          if (!KEYS.has(k)) { out.push(`${tag}: "${k}" is not a state key`); return; }
+          const ctl = comps.find((c) => c.key === k && fns[c.id] && fns[c.id].onChange);
+          let patch = { [k]: v };
+          if (ctl) {
+            try { patch = fns[ctl.id].onChange(sandbox.view(sandbox.deepFreeze(clone(S))), v); } catch (e) { out.push(`${tag}: ${ctl.id}.onChange(${JSON.stringify(v)}) threw: ${e.message}`); return; }
+          }
+          if (!patch || typeof patch !== 'object' || Object.keys(patch).some((key) => !KEYS.has(key)) || sandbox.findBadValue(patch)) {
+            out.push(`${tag}: setting ${k} = ${JSON.stringify(v)} gave an invalid state`); return;
+          }
+          S = Object.assign(S, clone(patch));
+        }
+        let shown;
+        try { shown = fns[ro.id].value(sandbox.view(sandbox.deepFreeze(clone(S)))); } catch (e) { out.push(`${tag}: ${ro.id}.value threw: ${e.message}`); return; }
+        if (!numberShown(shown, ck.expect)) {
+          const set = Object.entries(ck.set).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(', ');
+          out.push(`${tag}: with ${set}, readout ${ro.id} (${clip(ro.label || ro.id, 40)}) shows ${clip(isNum(shown) ? +shown.toPrecision(4) : shown, 40)}, but the section's worked example gives ${ck.expect}: fix the formula (or the check's settings)`);
+        }
+      });
+      return out;
     }
 
     const base = runViews(S0, 'on the initial state');
@@ -476,6 +527,7 @@
       facts = factsOf(comps, S0, lastMarks, stats);
       layout = layoutProblems(views, stateMarks, { x: xReach, y: yReach }, growing);
       coverage = coverageProblems(spec, comps);
+      checks = selfChecks(spec, comps, S0);
       const cov = coversOf(spec);
       if (cov.length) facts.covers = cov.slice(0, 16).map((it) => ({ need: clip(it.need, 100), kind: it.kind, by: it.by.slice(0, 6) }));
     }

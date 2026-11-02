@@ -93,9 +93,9 @@ PG_LOOK_CHECKED = ("overlapping or cut-off shapes, arrows with no room, labels c
 LAYOUT_LEAD = ("The playground works and passed every check. Fix only these on-screen layout problems, keeping the same "
                "controls, state, maths and views; move, resize or relabel only what is listed.")
 # Nov 2: coverage problems (plan.covers items no component delivers) share the one soft repair with layout problems.
-SOFT_LEAD = ("The playground works and passed every check. Fix only the problems listed below: add or fix what a plan.covers "
-             "item needs, and move, resize or relabel what a layout problem names. Keep every other control, state value, "
-             "formula and view as it is.")
+SOFT_LEAD = ("The playground works and passed every check. Fix only the problems listed below: correct the formula a failed "
+             "worked-example check points to, add or fix what a plan.covers item needs, and move, resize or relabel what a "
+             "layout problem names. Keep every other control, state value, formula and view as it is.")
 PLAN_TOKENS = 8_000  # the plan is small; most of a High-effort call is thinking
 MAX_TOKENS = 32_000  # builds are streamed (the SDK refuses a non-streaming call above ~21k); a High-effort build used 13-16k+, mostly thinking
 CUTOFF = "cut off"  # check_stop's wording when a reply hit max_tokens
@@ -1546,7 +1546,9 @@ def check_playground(spec: Any) -> dict:
             facts = result.get("facts")
             layout = [str(m) for m in result.get("layout") or [] if m][:10]
             coverage = [str(m) for m in result.get("coverage") or [] if m][:10]
-            return {"problems": [], "facts": facts if isinstance(facts, dict) else None, "layout": layout, "coverage": coverage}
+            checks = [str(m) for m in result.get("checks") or [] if m][:4]
+            return {"problems": [], "facts": facts if isinstance(facts, dict) else None, "layout": layout, "coverage": coverage,
+                    "checks": checks}
         errors = [str(e) for e in result.get("errors") or []]
         return {"problems": errors or ["the checker rejected it without saying why: keep it simple and standard"], "facts": None}
     return {"problems": [CHECK_FAILED], "facts": None}
@@ -1597,7 +1599,7 @@ def _pg_ask(client: anthropic.Anthropic, usage: UsageLog, step: str, payload: di
         log.exception("Playground: Haiku call failed (%s)", step)
         why.append(friendly_error(e))
         return None
-    return spec
+    return _keep_checks(spec, payload)
 
 
 def _no_playground(spec: Any) -> bool:
@@ -1743,11 +1745,47 @@ COVERS_MISSING = "plan.covers is missing"  # validator.cjs coverageProblems' mes
 
 
 def _soft(report: dict) -> list[str]:
-    """A passing playground's soft problems for the repair: coverage first (what is missing), then layout (how it looks).
-    A missing covers list alone isn't sent: writing the list afterwards adds nothing to the playground, and older saved
-    playgrounds (follow-up edits) have none."""
+    """A passing playground's soft problems for the repair: worked-example checks first (wrong numbers), then coverage
+    (what is missing), then layout (how it looks). A missing covers list alone isn't sent: writing the list afterwards
+    adds nothing to the playground, and older saved playgrounds (follow-up edits) have none."""
     cov = [m for m in report.get("coverage") or [] if not m.startswith(COVERS_MISSING)]
-    return [*cov, *(report.get("layout") or [])]
+    return [*(report.get("checks") or []), *cov, *(report.get("layout") or [])]
+
+
+_SECTION_NUM = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?")
+
+
+def _decimals(x: float | str) -> int:
+    t = repr(x) if isinstance(x, float) else str(x)
+    return len(t.split(".")[1]) if "." in t and "e" not in t.lower() else 0
+
+
+def _close(expect: float, written: float, text: str) -> bool:
+    """expect is a number written in the section: equal at the section's precision, at most 2 decimals finer (0.357
+    matches a written 0.36), never coarser (0 doesn't match 0.36), and a whole number in the section matches only a whole
+    expect (3.4 doesn't match 3)."""
+    exp_dec = 0 if expect == int(expect) else _decimals(expect)
+    dec = _decimals(text)
+    if exp_dec < dec or exp_dec > dec + 2 or (dec == 0 and exp_dec > 0):
+        return False
+    return abs(expect - written) <= 0.5 * 10 ** -dec + 1e-9
+
+
+def _keep_checks(spec: Any, payload: dict) -> Any:
+    """spec with only the worked-example checks whose expected number the section itself writes (so a check tests
+    Haiku's maths against the section, never against Haiku's own numbers). Nov 2."""
+    if not isinstance(spec, dict) or not isinstance(spec.get("checks"), list):
+        return spec
+    text = json.dumps(payload.get("section") or {}, ensure_ascii=False)
+    text = re.sub(r'"index": \d+', "", text)  # the block numbers aren't the section's numbers
+    text = re.sub(r"(\d),(?=\d{3}(?!\d))", r"\1", text)  # 1,024 -> 1024
+    written = [(float(t), t) for t in _SECTION_NUM.findall(text)]
+    kept = [c for c in spec["checks"] if isinstance(c, dict) and _num(c.get("expect"))
+            and any(_close(float(c["expect"]), w, t) or _close(float(c["expect"]) * 100, w, t) for w, t in written)]
+    if len(kept) < len(spec["checks"]):
+        log.info("Playground: %d of %d worked-example checks dropped (expected number not in the section)",
+                 len(spec["checks"]) - len(kept), len(spec["checks"]))
+    return {**spec, "checks": kept}
 
 
 def _pg_fix_layout(client: anthropic.Anthropic, usage: UsageLog, payload: dict, spec: dict, report: dict, res: dict,
@@ -1760,6 +1798,8 @@ def _pg_fix_layout(client: anthropic.Anthropic, usage: UsageLog, payload: dict, 
     seen = report.get("layout") or []
     if report.get("coverage"):
         res.setdefault("coverage_seen", []).extend(report["coverage"])
+    if report.get("checks"):
+        res.setdefault("checks_seen", []).extend(report["checks"])
     if seen:
         res.setdefault("layout_seen", []).extend(seen)  # first-draft messages, for test-run stats
         fixed = _pg_layout_autofix(spec, seen)
@@ -1776,7 +1816,7 @@ def _pg_fix_layout(client: anthropic.Anthropic, usage: UsageLog, payload: dict, 
             break
         cov = [m for m in report.get("coverage") or [] if not m.startswith(COVERS_MISSING)]
         res["layout_repairs"] = res.get("layout_repairs", 0) + 1
-        lead = SOFT_LEAD if cov else LAYOUT_LEAD
+        lead = SOFT_LEAD if cov or report.get("checks") else LAYOUT_LEAD
         fixed = _pg_ask(client, usage, "playground layout", payload, settings, why,
                         {"yourPreviousSpec": spec, "problems": [lead, *soft]}, effort=settings.fix)
         if fixed is None or _no_playground(fixed) or not isinstance(fixed, dict):
@@ -1790,9 +1830,14 @@ def _pg_fix_layout(client: anthropic.Anthropic, usage: UsageLog, payload: dict, 
             res["layout_fixed"] = res.get("layout_fixed", 0) + 1
         if len([m for m in again.get("coverage") or [] if not m.startswith(COVERS_MISSING)]) < len(cov):
             res["coverage_fixed"] = res.get("coverage_fixed", 0) + 1
+        if len(again.get("checks") or []) < len(report.get("checks") or []):
+            res["checks_fixed"] = res.get("checks_fixed", 0) + 1
         spec, report = fixed, again
     if report.get("coverage"):
         res.setdefault("coverage_left", []).extend(report["coverage"])
+    if report.get("checks"):  # kept anyway (a soft problem never costs a working playground), but logged
+        res.setdefault("checks_failed", []).extend(report["checks"])
+        log.warning("Playground: worked-example checks still fail after the repair: %s", report["checks"])
     return spec, report
 
 
