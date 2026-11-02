@@ -89,7 +89,7 @@ PG_LOOK_LEAD = ("The playground works and passed every check. Fix only how it lo
                 "keeping the same controls, state, maths and views.")
 PG_LOOK_CHECKED = ("overlapping or cut-off shapes, arrows with no room, labels cut inside shapes, link labels on shapes, links "
                    "through shapes, lines outside or capped at the y range, a mostly empty x or y range, text marks and heatmaps past "
-                   "the chart's edge, a y-axis name on heatmap cells")
+                   "the chart's edge, the y-axis name on the plot (it is drawn above it)")
 LAYOUT_LEAD = ("The playground works and passed every check. Fix only these on-screen layout problems, keeping the same "
                "controls, state, maths and views; move, resize or relabel only what is listed.")
 PLAN_TOKENS = 8_000  # the plan is small; most of a High-effort call is thinking
@@ -1643,14 +1643,12 @@ def _pg_autofix(spec: dict, problems: list[str]) -> dict | None:
 
 
 # Layout problems code can fix in the spec itself (messages from layoutProblems in shared/playground/validator.cjs).
-# Seen in 167 saved playgrounds (Oct 31): a y-axis name on heatmap cells, a mostly empty x or y range, a probability curve
+# Seen in 167 saved playgrounds (Oct 31): a mostly empty x or y range, a probability curve
 # running along the top edge of [0, 1], a line just outside y. Text past the edge is fixed by the renderer (placeText).
-_PG_HEAT_YLABEL = re.compile(r"^([\w-]+): the y-axis name '(.*)' is drawn over the heatmap's top-left cells")
 _PG_EMPTY = re.compile(rf"^([\w-]+): the data never fills more than \d+% of the ([xy]) range \[{_NUM},{_NUM}\].*?narrow \2 to about \[{_NUM}, {_NUM}\]")
 _PG_CAPPED = re.compile(rf"^([\w-]+): .*? sits on the top edge of the chart \(y = {_NUM}\)")
 _PG_Y_OUT = re.compile(rf"^([\w-]+): .*? lies outside the y range \[{_NUM},{_NUM}\] for \d+ of \d+ points \(values {_NUM} to {_NUM}\)")
 _PG_HEAT_OUT = re.compile(rf"^([\w-]+): the heatmap covers ([xy]) .*?set the chart's \2 to \[{_NUM},{_NUM}\]")
-PG_TITLE_MAX = 60
 PG_WIDEN_MAX = 3  # a line outside y is fitted only if y grows at most 3x; more would squash the rest (left to Haiku)
 
 
@@ -1660,22 +1658,14 @@ def _range(v: Any) -> list[float] | None:
 
 
 def _pg_layout_autofix(spec: dict, layout: list[str]) -> dict | None:
-    """A copy of spec with the layout problems code can fix applied (see _PG_HEAT_YLABEL...), or None if none applied.
+    """A copy of spec with the layout problems code can fix applied (see _PG_EMPTY...), or None if none applied.
     The caller keeps it only if every check still passes and fewer layout problems are left."""
     out = json.loads(json.dumps(spec))
     comps = out.get("components") if isinstance(out.get("components"), list) else []
     charts = {c.get("id"): c for c in comps if isinstance(c, dict) and c.get("type") == "chart"}
     changed = False
     for msg in layout:
-        if m := _PG_HEAT_YLABEL.match(msg):
-            c = charts.get(m.group(1))
-            if c is None or not c.get("yLabel"):
-                continue
-            name = str(c.pop("yLabel"))
-            title = str(c.get("title") or "").strip()
-            c["title"] = (f"{title} (rows: {name})" if title else f"Rows: {name}")[:PG_TITLE_MAX]
-            changed = True
-        elif m := _PG_EMPTY.match(msg):  # x or y
+        if m := _PG_EMPTY.match(msg):  # x or y
             c, axis = charts.get(m.group(1)), m.group(2)
             old = _range(c.get(axis)) if c is not None else None
             if old is None:

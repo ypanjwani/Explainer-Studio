@@ -1020,7 +1020,7 @@ A diagram has the same shape; its chart draws shapes and links (again placeholde
 - toggle: { "type": "toggle", "label", "key", "onChange"? } -- state[key] must be a boolean.
 - button: { "type": "button", "label", "onClick" }. A Reset button (back to the initial state) is added automatically; don't add one.
 - play: { "type": "play", "label", "onTick", "interval"? (ms, default 100), "maxSteps"? } -- Play/Pause; calls onTick repeatedly, stops when it returns null.
-- chart: { "type": "chart", "title"?, "x": [min, max], "y": [min, max], "xLabel"?, "yLabel"?, "draw", "onDrag"?, "onClick"?, "axes"? } -- give fixed x/y ranges whenever possible (omit only if truly unknown). Axes hide automatically for charts of only graph/tree/matrix/sequence/pie marks or with a grid; "axes": false/true overrides.
+- chart: { "type": "chart", "title"?, "x": [min, max], "y": [min, max], "xLabel"?, "yLabel"?, "draw", "onDrag"?, "onClick"?, "axes"?, "zoom"?, "aspect"? } -- give fixed x/y ranges whenever possible (omit only if truly unknown). A y range not starting at 0 zooms in by itself when the data in view fits in a quarter of it, and a range shrinks to a heatmap smaller than it (never on charts with dragging); "zoom": false keeps the range fixed, for when comparing sizes across settings is the point. The same range on both axes around 0 (a plane of vectors or points) is drawn with equal x and y scales; "aspect": "equal" forces that, "free" turns it off. Axes hide automatically for charts of only graph/tree/matrix/sequence/pie marks or with a grid; "axes": false/true overrides.
 - readout: { "type": "readout", "label", "value" } -- one big live number.
 
 ## Slots (JS function BODIES as strings; they must "return")
@@ -1042,11 +1042,11 @@ Forbidden: DOM, window, document, fetch, timers, eval, Function, imports. No net
 
 ## Marks (returned by draw; positions in data units)
 line(points, opts), area(points, opts), points(points, opts), point(x, y, opts), bars([[x, height], ...], opts), hline(y, opts), vline(x, opts), rect(x1, y1, x2, y2, opts), arrow(x1, y1, x2, y2, opts), text(x, y, str, opts).
-points = [[x, y], ...]. opts: color ('blue','orange','green','red','purple','teal','gray','pink' or index 0-7), colors (per-point or per-bar array), opacity, dashed, width, r (radius px), labels (bar labels under the axis), align ('left'|'right' for text), label (series name, shown on hover).
+points = [[x, y], ...]. opts: color ('blue','orange','green','red','purple','teal','gray','pink' or index 0-7), colors (per-point or per-bar array), opacity, dashed, width, r (radius px), labels (bar labels under the axis), align ('left'|'right' for text), label (series name; 2+ named series in different colours get a legend), showValues (bars: up to 12 bars on a chart with no text marks show their values by themselves; false hides them).
 Grouped bars: to compare series, return several bars marks with the SAME x positions (e.g. 0, 1, 2) and a label each; they are drawn side by side automatically. Never offset x by hand to avoid overlap.
 Draggable: point(..., { id: 'name', draggable: true }) or points(..., { id: 'name', draggable: true }); the chart's onDrag receives that id and the point index.
 More chart kinds:
-- heatmap(values2D, opts): values[row][col], row 0 drawn at the top. Covers x/y extents opts.x, opts.y (default [0, cols], [0, rows]). opts: color, min, max, diverging (true = centred on 0, negatives in negColor), showValues, xLabels, yLabels (category labels replace that axis's ticks).
+- heatmap(values2D, opts): values[row][col], row 0 drawn at the top. Covers x/y extents opts.x, opts.y (default [0, cols], [0, rows]). opts: color, min, max, diverging (true = centred on 0, negatives in negColor), showValues, xLabels, yLabels (category labels replace that axis's ticks), cellLabels (a 2D array naming each cell, drawn above its value: give it when the cells have names, like TP / FN / FP / TN).
 - pie(values, opts): opts labels, colors, donut (0-0.9 inner radius). A chart with only pie/text marks hides its axes; omit x/y for it.
 - countplot(labels, opts) -> bars of how often each category occurs (opts.order to fix category order); set chart x to [-0.5, k - 0.5] for k categories.
 - kde(samples, opts) -> smooth density curve; opts bandwidth (default Silverman), range [lo, hi], n, fill (true = filled area), color.

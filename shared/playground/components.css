@@ -77,7 +77,10 @@ html { scrollbar-gutter: stable; }
 .hover-dot { fill: var(--text); stroke: var(--surface); stroke-width: 2; pointer-events: none; }
 .mk-clip { fill: none; stroke: var(--text); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .mk-cliplabel { fill: var(--text); font-size: 12px; font-weight: 700; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; }
-.mk-clip, .mk-cliplabel, .mk-text, .mk-cellval, .mk-slicelabel, .mk-barlabel, .ax-tick, .ax-label { pointer-events: none; }
+.mk-barval { fill: var(--text-2); font-size: 11px; font-weight: 600; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; }
+.mk-legend { fill: var(--surface); fill-opacity: 0.9; stroke: var(--border); }
+.mk-legendtext { fill: var(--text-2); font-size: 12px; }
+.mk-barval, .mk-legendbox, .mk-clip, .mk-cliplabel, .mk-text, .mk-cellval, .mk-slicelabel, .mk-barlabel, .ax-tick, .ax-label { pointer-events: none; }
 .pg-range { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; margin-top: -2px; }
 .pg-chart-title { font-weight: 600; font-size: 13px; margin: 0 4px 4px; }
 .pg-svg { width: 100%; height: auto; display: block; touch-action: none; user-select: none; }
@@ -100,6 +103,7 @@ html { scrollbar-gutter: stable; }
 .mk-cell.is-dense { stroke: none; }
 .mk-cellval { fill: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
 .mk-cellval.is-strong { fill: #fff; font-weight: 600; }
+.mk-cellname { font-weight: 700; }
 .mk-slice { stroke: var(--surface); stroke-width: 2; }
 .mk-hole { fill: var(--surface); }
 .mk-slicelabel { fill: #fff; font-size: 13px; font-weight: 600; paint-order: stroke; stroke: rgba(0, 0, 0, .25); stroke-width: 2px; }

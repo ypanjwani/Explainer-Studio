@@ -19,7 +19,7 @@
     { "id": "share", "type": "chart", "title": "Outcomes",
       "draw": "const c = (pred, act) => state.scores.filter((s) => (s[0] >= state.t ? 1 : 0) === pred && s[1] === act).length;\nreturn [pie([c(1, 1), c(0, 1), c(1, 0), c(0, 0)], { labels: ['TP', 'FN', 'FP', 'TN'], colors: ['green', 'orange', 'red', 'blue'], donut: 0.45 })];" },
     { "id": "dens", "type": "chart", "title": "Scores by class", "x": [0, 1], "xLabel": "score",
-      "draw": "const pos = state.scores.filter((s) => s[1] === 1).map((s) => s[0]), neg = state.scores.filter((s) => s[1] === 0).map((s) => s[0]);\nreturn [\n  kde(neg, { range: [0, 1], fill: true, color: 'blue' }), kde(neg, { range: [0, 1], color: 'blue' }),\n  kde(pos, { range: [0, 1], fill: true, color: 'green' }), kde(pos, { range: [0, 1], color: 'green' }),\n  vline(state.t, { color: 'gray', dashed: true })\n];" },
+      "draw": "const pos = state.scores.filter((s) => s[1] === 1).map((s) => s[0]), neg = state.scores.filter((s) => s[1] === 0).map((s) => s[0]);\nreturn [\n  kde(neg, { range: [0, 1], fill: true, color: 'blue' }), kde(neg, { range: [0, 1], color: 'blue' }),\n  kde(pos, { range: [0, 1], fill: true, color: 'green' }), kde(pos, { range: [0, 1], color: 'green' }),\n  vline(state.t, { color: 'gray', dashed: true }),\n  ...[[neg, 'negative', 'blue'], [pos, 'positive', 'green']].map(([v, name, color]) => { const k = kde(v, { range: [0, 1] }); const peak = k.points.reduce((a, p) => (p[1] > a[1] ? p : a)); return text(peak[0], peak[1], name, { color }); })\n];" },
     { "id": "acc", "type": "readout", "label": "Accuracy",
       "value": "return state.scores.filter((s) => (s[0] >= state.t ? 1 : 0) === s[1]).length / (state.scores.length || 1);" },
     { "id": "f1", "type": "readout", "label": "F1",

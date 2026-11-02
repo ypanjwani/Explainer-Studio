@@ -263,7 +263,13 @@ describe("playground layout check", () => {
     const r = validate(chartSpec("return [node('a', 2, 3, { label: 'Concat and heads', w: 60 }), node('b', 4, 3, { label: 'b', w: 60 + 10 * state.a }), link('a', 'b', { label: 'long link text' })];"));
     const all = r.layout.join("\n");
     expect(all).toMatch(/'Concat and heads' shows as 'Concat …' because shape 'a' is too narrow; make it wider \(w: 116\)/);
-    expect(all).toMatch(/label 'long link text' on the link from 'a' to 'b' sits on shape/);
+    // a link label with no room between the shapes is moved above them (Nov 2), so it is not reported
+    expect(all).not.toMatch(/label 'long link text'/);
+    const structures = require("../shared/playground/structures.cjs");
+    const geom = (cx: number) => ({ shape: "box", cx, cy: 100, hw: 30, hh: 20 });
+    const geoms = new Map([["a", geom(100)], ["b", geom(170)]]);
+    expect(structures.linkGeom({ from: "a", to: "b", label: "long link text" }, geoms).ly).toBeLessThanOrEqual(80);
+    expect(structures.linkGeom({ from: "a", to: "b", label: "w" }, geoms).ly).toBe(100);
   });
 
   it("reports a line outside the y range and a line capped at the top edge", () => {
@@ -328,16 +334,16 @@ describe("playground layout check: text, heatmaps, axis names, links through sha
   it("reports a problem that appears only after a control moves, marked as later", () => {
     const capped = validate(spec("return [line(range(11).map((i) => [i, Math.min(6, state.a * state.a * i)]))];"));
     expect(capped.layout.join("\n")).toMatch(/sits on the top edge.*\(after the controls move, not at the start\)/);
-    const first = validate(spec("return [heatmap([[state.a, 2], [3, 4]], { x: [0, 10], y: [0, 6] })];", { yLabel: "query" }));
+    const first = validate(spec("return [heatmap([[state.a, 2], [3, 4]], { x: [0, 12], y: [0, 6] })];"));
     expect(first.layout).toHaveLength(1);
     expect(first.layout[0]).not.toMatch(/after the controls move/);
   });
 
-  it("reports a heatmap bigger than the fixed range, and a y-axis name on its cells", () => {
+  it("reports a heatmap bigger than the fixed range", () => {
     const r = validate(spec("return [heatmap([[state.a, 2], [3, 4]], { x: [0, 12], y: [0, 6] })];", { yLabel: "query token" }));
     const all = r.layout.join("\n");
     expect(all).toMatch(/the heatmap covers x \[0,12\] but the chart's x range is \[0,10\]/);
-    expect(all).toMatch(/y-axis name 'query token' is drawn over the heatmap/);
+    expect(all).not.toMatch(/y-axis name/);  // drawn above the plot since Nov 2: it can't sit on the cells
     expect(validate(spec("return [heatmap([[state.a, 2], [3, 4]], { x: [0, 10], y: [0, 6] })];")).layout).toEqual([]);
   });
 
@@ -347,5 +353,300 @@ describe("playground layout check: text, heatmaps, axis names, links through sha
     expect(straight.layout.join("\n")).toMatch(/link from 'a' to 'b' runs through shape 'mid'/);
     const bent = validate(spec(`return [${shapes}, link('a', 'b', { curve: 0.6 })];`));
     expect(bent.layout.join("\n")).not.toMatch(/runs through/);
+  });
+});
+
+// Nov 1 fixes from the rubric eval (playground-rubric-eval-results.md), measured on 206 saved playgrounds.
+describe("playground: growing charts, legends, numbers, dots, bar headroom, fitted labels", () => {
+  const structures = require("../shared/playground/structures.cjs");
+  // one chart; extra components (a Step button, Play...) come first
+  const withChart = (draw: string, chart: Record<string, unknown>, state: Record<string, unknown>, ...controls: Record<string, unknown>[]) => ({
+    title: "t", state, components: [...controls, { id: "c1", type: "chart", title: "C", draw, ...chart }],
+  });
+
+  it("does not call a chart that grows with each Step press empty (the dry run presses only twice)", () => {
+    const step = { id: "b1", type: "button", label: "Step", onClick: "return { hist: [...state.hist, state.hist.length * 0.5] };" };
+    const grows = withChart("return [line(state.hist.map((v, i) => [i, v]))];", { x: [0, 30], y: [0, 20] }, { hist: [0, 0.5] }, step);
+    expect(validate(grows).layout.join("\n")).not.toMatch(/x range/);
+    // the same chart driven by Play
+    const play = { id: "p1", type: "play", label: "Play", onTick: "return state.hist.length > 80 ? null : { hist: [...state.hist, 1] };" };
+    expect(validate(withChart("return [line(state.hist.map((v, i) => [i, v]))];", { x: [0, 300], y: [0, 2] }, { hist: [1, 1] }, play)).layout.join("\n")).not.toMatch(/x range/);
+    // a button that only changes values (x stays 0..2) is still reported
+    const bump = { id: "b1", type: "button", label: "More", onClick: "return { a: state.a + 1 };" };
+    const fixed = withChart("return [bars(range(3).map((i) => [i, 1 + state.a]))];", { x: [0, 30], y: [0, 20] }, { a: 1 }, bump);
+    expect(validate(fixed).layout.join("\n")).toMatch(/never fills more than \d+% of the x range/);
+  });
+
+  it("asks for legend words when 2+ lines in different colours have none", () => {
+    const s1 = { id: "s1", type: "slider", label: "a", key: "a", min: 0, max: 2, step: 1 };
+    const two = "line([[0, 1], [10, 2 + state.a]], { color: 'blue' }), line([[0, 3], [10, 4]], { color: 'orange' })";
+    expect(validate(withChart(`return [${two}];`, { x: [0, 10], y: [0, 6] }, { a: 1 }, s1)).layout.join("\n")).toMatch(/2 lines in different colours but nothing says which is which/);
+    expect(validate(withChart(`return [${two}, text(8, 2.2, 'train'), text(8, 4.2, 'test')];`, { x: [0, 10], y: [0, 6] }, { a: 1 }, s1)).layout).toEqual([]);
+    // same colour: one family of lines, nothing to tell apart
+    const same = "line([[0, 1], [10, 2 + state.a]]), line([[0, 3], [10, 4]])";
+    expect(validate(withChart(`return [${same}];`, { x: [0, 10], y: [0, 6] }, { a: 1 }, s1)).layout).toEqual([]);
+  });
+
+  it("gives bars on a fixed y range room above the top, and leaves other charts alone", () => {
+    expect(structures.chartFrame({ y: [0, 1] }, [{ type: "bars", items: [[0, 1]] }]).dom.y).toEqual([0, 1.04]);
+    expect(structures.chartFrame({ y: [0, 1] }, [{ type: "line", points: [[0, 1], [1, 0]] }]).dom.y).toEqual([0, 1]);
+    expect(structures.chartFrame({ y: [-2, -1] }, [{ type: "bars", items: [[0, -1.5]] }]).dom.y).toEqual([-2, -1]);
+  });
+
+  it("writes big readouts in full and big axis ticks short", () => {
+    const s1 = { id: "s1", type: "slider", label: "r", key: "r", min: 1, max: 64, step: 1 };
+    const spec = {
+      title: "t", state: { r: 8 }, components: [s1,
+        { id: "r1", type: "readout", label: "Params", value: "return state.r * 32768;" },
+        { id: "c1", type: "chart", title: "C", x: [0, 64], y: [0, 2200000], draw: "return [line([[0, 0], [state.r, state.r * 32768]])];" }],
+    };
+    const { doc } = frame(spec);
+    expect(doc.querySelector(".pg-readout-value")?.textContent).toBe("262,144");
+    const ticks = [...doc.querySelectorAll("svg .ax-tick")].map((t) => t.textContent);
+    expect(ticks.some((t) => /^\d+(\.\d+)?M$/.test(t ?? ""))).toBe(true);
+    expect(ticks.join(" ")).not.toMatch(/e\+/);
+  });
+
+  it("draws a dot on the plot's edge whole (its own clip, grown by its radius)", () => {
+    const s1 = { id: "s1", type: "slider", label: "a", key: "a", min: 0, max: 2, step: 1 };
+    const { doc } = frame(withChart("return [line([[0, 0], [10, state.a]]), points([[0, 0], [5, 1]], { r: 5 })];", { x: [0, 10], y: [0, 2] }, { a: 1 }, s1));
+    const dotClip = [...doc.querySelectorAll("clipPath")].find((c) => c.id.endsWith("-dot"));
+    expect(dotClip).toBeTruthy();
+    const circles = doc.querySelectorAll(`g[clip-path="url(#${dotClip?.id})"] circle`);
+    expect(circles.length).toBe(2);
+  });
+
+  it("fits numbers and labels before cutting them", () => {
+    const fmt = (v: number) => String(Number(v.toPrecision(3)));
+    expect(structures.fitNum(-0.5312, 4, fmt)).toBe("-.53");
+    expect(structures.fitNum(1.2345, 3, fmt)).toBe("1.2");
+    expect(structures.fitNum(0.0033, 4, fmt)).toBe(".003");  // a small value never shows as 0
+    expect(structures.fitNum(262144, 4, (v: number) => String(v))).toBe("262k");
+    expect(structures.fitNum(7, 3, fmt)).toBe("7");
+    expect(structures.fitNum(-0.642, 2, fmt)).toBe("-…");  // no room: cut, never rounded to -1
+    expect(structures.fitNum(12.6, 2, fmt)).toBe("13");
+    expect(structures.fitText("newest low", 8, 6.5)[0]).toBe("newest low");  // squeezed, not cut
+    expect(structures.fitText("newest low", 8, 6.5)[1]).toMatch(/textLength="52"/);
+    expect(structures.fitText("a much longer label here", 8, 6.5)[0]).toMatch(/…$/);
+    expect(structures.fitText("short", 8, 6.5)).toEqual(["short", ""]);
+  });
+});
+
+// Nov 2 fixes from the rubric eval: hand-placed graph nodes too close (row 18), lines past the y range (rows 1, 4).
+describe("playground: crowded manual graphs and lines past the y range", () => {
+  const structures = require("../shared/playground/structures.cjs");
+  const s1 = { id: "s1", type: "slider", label: "a", key: "a", min: 0, max: 2, step: 1 };
+  const chart = (draw: string, extra: Record<string, unknown> = {}) => ({
+    title: "t", state: { a: 1 }, components: [s1, { id: "c1", type: "chart", title: "C", draw, ...extra }],
+  });
+  // three columns of nodes, `gap` y units apart, on y [0, 7]: 1 unit = 34.6 px
+  const column = (gap: number, label = "the cat") =>
+    `return [graph({ nodes: [0, 1, 2, 3].map((i) => ({ label: '${label}' + i, x: 1 + state.a * 0.01, y: 1 + i * ${gap} })), edges: [] }, { layout: 'manual' })];`;
+  const box = { x0: 46, y0: 16, x1: 426, y1: 258 };
+
+  it("shrinks hand-placed nodes so circles and the names under them don't collide", () => {
+    const sy = (v: number) => 258 - v / 7 * 242;
+    const m = { type: "graph", layout: "manual", nodes: [0, 1].map((i) => ({ label: "the cat", x: 1, y: 1 + i })), edges: [] };
+    const g = structures.manualGraph(m, (v: number) => v * 40, sy, box);
+    expect(g.r).toBeLessThan(10);  // was 18: 36 px circles 35 px apart
+    expect(g.r).toBeGreaterThanOrEqual(structures.GRAPH_MIN_R);
+    expect(g.clash).toEqual([]);
+    // short names sit inside the node: only the circles limit the size
+    const inside = structures.manualGraph({ ...m, nodes: m.nodes.map((nd) => ({ ...nd, label: "a" })) }, (v: number) => v * 40, sy, box);
+    expect(inside.r).toBeGreaterThan(g.r);
+  });
+
+  it("reports nodes too close even at the smallest size, with the distance that fits", () => {
+    const tight = validate(chart(column(0.4), { x: [0, 3], y: [0, 7], axes: false }));
+    expect(tight.ok).toBe(true);
+    expect(tight.layout.join("\n")).toMatch(/the name under graph node 'the cat\d' lands on node 'the cat\d' below it.*at least [\d.]+ y units apart/);
+    expect(validate(chart(column(1.5), { x: [0, 3], y: [0, 7], axes: false })).layout).toEqual([]);
+  });
+
+  it("reports names side by side that run into each other", () => {
+    const draw = "return [graph({ nodes: [{ label: 'left words', x: 1, y: 3 + state.a * 0.01 }, { label: 'right words', x: 2.5, y: 3 }], edges: [] }, { layout: 'manual' })];";
+    expect(validate(chart(draw, { x: [0, 10], y: [0, 6], axes: false })).layout.join("\n")).toMatch(/names under graph nodes 'left words' and 'right words' run into each other/);
+  });
+
+  it("reports a text mark drawn on a node or on its name", () => {
+    const nodes = "graph({ nodes: [{ label: 'start', x: 2, y: 3 + state.a * 0.01 }, { label: 'end', x: 8, y: 3 }], edges: [[0, 1]] }, { layout: 'manual' })";
+    expect(validate(chart(`return [${nodes}, text(2, 3, '0.5')];`, { x: [0, 10], y: [0, 6], axes: false })).layout.join("\n")).toMatch(/the text '0.5' is drawn on graph node 'start'/);
+    expect(validate(chart(`return [${nodes}, text(5, 5, '0.5')];`, { x: [0, 10], y: [0, 6], axes: false })).layout).toEqual([]);
+  });
+
+  it("marks where a line leaves the y range, with its furthest value, in the line's colour", () => {
+    const { doc } = frame(chart("return [line([[0, 1], [4, 2], [6, 40 + state.a], [8, 2]], { color: 'orange' })];", { x: [0, 10], y: [0, 6] }));
+    const arrows = [...doc.querySelectorAll("svg path.mk-clip")];
+    expect(arrows).toHaveLength(1);
+    expect(arrows[0].getAttribute("style")).toContain("var(--c-orange)");
+    expect([...doc.querySelectorAll("svg .mk-cliplabel")].map((t) => t.textContent)).toEqual(["41"]);
+  });
+
+  it("marks each stretch above and below once, and skips a straight guide line", () => {
+    const zig = "line([[0, 3], [1, 9], [2, -4], [3, 12], [4, -8 - state.a]]), points([[1, 9], [3, 12]])";
+    const { doc } = frame(chart(`return [${zig}, line([[0, -50], [10, 50]], { dashed: true })];`, { x: [0, 10], y: [0, 6] }));
+    expect(doc.querySelectorAll("svg path.mk-clip")).toHaveLength(4);  // 2 up, 2 down; the dots add none, the guide none
+    expect([...doc.querySelectorAll("svg .mk-cliplabel")].map((t) => t.textContent).sort()).toEqual(["-9", "12"]);
+    // inside the range: nothing
+    const { doc: ok } = frame(chart("return [line([[0, 1], [10, 5 + state.a * 0]])];", { x: [0, 10], y: [0, 6] }));
+    expect(ok.querySelectorAll("svg .mk-clip, svg .mk-cliplabel")).toHaveLength(0);
+  });
+});
+
+// Nov 2 (2): bar values (rubric eval rows 10, 29) and series legends (rows 3, 6, 12, 28).
+describe("playground: bar values and series legends", () => {
+  const s1 = { id: "s1", type: "slider", label: "a", key: "a", min: 0, max: 2, step: 1 };
+  const chart = (draw: string, extra: Record<string, unknown> = { x: [-0.5, 3.5], y: [0, 1] }) => ({
+    title: "t", state: { a: 1 }, components: [s1, { id: "c1", type: "chart", title: "C", draw, ...extra }],
+  });
+  const vals = (doc: Document) => [...doc.querySelectorAll("svg .mk-barval")].map((t) => t.textContent);
+
+  it("writes each bar's value when there are few bars and no text marks", () => {
+    expect(vals(frame(chart("return [bars([[0, 0.7], [1, 0.2 * state.a], [2, 0.1]], { labels: ['cat', 'dog', 'fox'] })];")).doc)).toEqual(["0.7", "0.2", "0.1"]);
+    // the chart's own text marks, many bars, or showValues: false -> none
+    expect(vals(frame(chart("return [bars([[0, 0.7], [1, 0.2 * state.a]]), text(2, 0.5, 'note')];")).doc)).toEqual([]);
+    expect(vals(frame(chart("return [bars(range(13).map((i) => [i, 0.05 * state.a]))];", { x: [-1, 13], y: [0, 1] })).doc)).toEqual([]);
+    expect(vals(frame(chart("return [bars([[0, 0.7 * state.a]], { showValues: false })];")).doc)).toEqual([]);
+  });
+
+  it("shortens a value to the bar's width and puts it inside a bar that reaches the top", () => {
+    const { doc } = frame(chart("return [bars(range(12).map((i) => [i, i === 0 ? 0.98 : 0.123456 * state.a]))];", { x: [-0.5, 11.5], y: [0, 1] }));
+    const t = [...doc.querySelectorAll("svg .mk-barval")];
+    expect(t).toHaveLength(12);
+    expect(t[0].getAttribute("class")).toContain("is-in");
+    expect(t[1].textContent!.length).toBeLessThanOrEqual(4);
+  });
+
+  it("draws a legend for 2+ named series in different colours, not for names already written", () => {
+    const two = "bars([[0, 0.5], [1, 0.3 * state.a]], { color: 'gray', label: 'Original' }), bars([[0, 0.4], [1, 0.2]], { color: 'orange', label: 'Average' })";
+    const { doc } = frame(chart(`return [${two}];`));
+    expect([...doc.querySelectorAll("svg .mk-legendtext")].map((t) => t.textContent)).toEqual(["Original", "Average"]);
+    expect(validate(chart(`return [${two}];`)).layout.join(" | ")).not.toMatch(/which is which/);
+    const written = frame(chart(`return [${two}, text(0, 0.9, 'Original'), text(1, 0.9, 'Average')];`)).doc;
+    expect(written.querySelectorAll("svg .mk-legendtext")).toHaveLength(0);
+    // one colour: nothing to tell apart
+    expect(frame(chart("return [line([[0, 0.1], [3, 0.5 * state.a]], { label: 'a' }), line([[0, 0.2], [3, 0.6]], { label: 'b' })];")).doc.querySelectorAll("svg .mk-legendtext")).toHaveLength(0);
+  });
+
+  it("asks for names on unnamed bar or dot series", () => {
+    const sets = "points([[0, 0.2], [1, 0.3 * state.a]], { color: 'blue' }), points([[2, 0.6], [3, 0.7]], { color: 'orange' })";
+    expect(validate(chart(`return [${sets}];`)).layout.join("\n")).toMatch(/2 sets of dots in different colours but nothing says which is which/);
+    const bars2 = "bars([[0, 0.5], [1, 0.3 * state.a]], { color: 'gray' }), bars([[0, 0.4], [1, 0.2]], { color: 'orange' })";
+    expect(validate(chart(`return [${bars2}];`)).layout.join("\n")).toMatch(/2 bar series in different colours/);
+    // one colour per set, or named: fine
+    expect(validate(chart("return [points([[0, 0.2], [1, 0.3 * state.a]]), points([[2, 0.6], [3, 0.7]])];")).layout).toEqual([]);
+  });
+});
+
+describe("playground: axis names", () => {
+  const s1 = { id: "s1", type: "slider", label: "a", key: "a", min: 0, max: 2, step: 1 };
+  const chart = (draw: string, extra: Record<string, unknown> = {}) => ({
+    title: "t", state: { a: 1 }, components: [s1, { id: "c1", type: "chart", title: "C", x: [0, 10], y: [0, 1], xLabel: "w", yLabel: "L(w)", draw, ...extra }],
+  });
+  const names = (doc: Document) => [...doc.querySelectorAll("svg .ax-label")].map((t) => [t.textContent, Number(t.getAttribute("y"))] as const);
+
+  it("draws the y-axis name above the plot, so nothing plotted sits on it", () => {
+    const { doc } = frame(chart("return [line([[0, 0.9], [10, 0.1 * state.a]]), text(0.2, 0.95, 'start')];"));
+    const y = names(doc).find(([t]) => t === "L(w)")!;
+    const top = Math.min(...[...doc.querySelectorAll("svg .ax-grid")].map((l) => Number(l.getAttribute("y1"))));
+    expect(y[1]).toBeLessThan(top);
+    const structures = require("../shared/playground/structures.cjs");
+    expect(structures.chartFrame({ x: [0, 1], y: [0, 1], yLabel: "L" }, [{ type: "line", points: [] }]).M.t)
+      .toBeGreaterThan(structures.chartFrame({ x: [0, 1], y: [0, 1] }, [{ type: "line", points: [] }]).M.t);
+  });
+
+  it("leaves out an axis name a text mark already writes", () => {
+    const { doc } = frame(chart("return [line([[0, 0.9], [10, 0.1 * state.a]]), text(8, 0.5, 'L(w)')];"));
+    expect(names(doc).map(([t]) => t)).toEqual(["w"]);
+    expect(doc.querySelectorAll("svg text.mk-text")).toHaveLength(1);
+  });
+});
+
+describe("playground: ranges that follow the data, and small drawing fixes", () => {
+  const structures = require("../shared/playground/structures.cjs");
+  const bars = (ys: number[]) => [{ type: "bars", items: ys.map((y, i) => [i, y]) }];
+
+  it("zooms a signed y range in by halves when the data fits a quarter of it", () => {
+    expect(structures.zoomRange({ y: [-8, 8] }, bars([0.8, -2.1])).y).toEqual([-2.5, 1.5]);
+    expect(structures.zoomRange({ y: [-8, 8] }, bars([6, -5])).y).toBeUndefined();          // fills it
+    expect(structures.zoomRange({ y: [0, 10] }, bars([0.3, 0.2])).y).toBeUndefined();       // a size scale from 0: stays
+    expect(structures.zoomRange({ y: [-8, 8], zoom: false }, bars([0.8, -2.1])).y).toBeUndefined();
+    expect(structures.zoomRange({ y: [-8, 8], onDrag: "return null;" }, bars([0.8, -2.1])).y).toBeUndefined();
+    expect(structures.zoomRange({ y: [-8, 8] }, bars([0, 0])).y).toBeUndefined();          // nothing to show yet
+    // a 2-point guide line drawn across the chart doesn't hold the range open
+    const guide = { type: "line", points: [[0, -50], [1, 50]] };
+    expect(structures.zoomRange({ y: [-8, 8] }, [...bars([0.8, -2.1]), guide]).y).toEqual([-2.5, 1.5]);
+  });
+
+  it("fits a chart's range to a heatmap smaller than it", () => {
+    const hm = { type: "heatmap", values: [[1, 2], [3, 4]], x: [0, 16], y: [0, 40] };
+    expect(structures.zoomRange({ x: [0, 48], y: [0, 40] }, [hm])).toEqual({ x: [0, 16] });
+  });
+
+  it("stops an arrow at the edge of a dot on its tip, and puts the agent beside a grid arrow", () => {
+    const c = (draw: string) => ({ title: "t", state: { a: 1 }, components: [{ id: "s", type: "slider", label: "a", key: "a", min: 0, max: 2, step: 1 },
+      { id: "c1", type: "chart", title: "C", x: [0, 10], y: [0, 10], draw }] });
+    const { doc } = frame(c("return [arrow(0, 0, 5, 5 * state.a * 0.2 + 4), point(5, 5 * state.a * 0.2 + 4, { r: 6 })];"));
+    const ar = doc.querySelector("svg .mk-arrow")!, pt = doc.querySelector("svg .mk-pt")!;
+    const gap = Math.hypot(Number(ar.getAttribute("x2")) - Number(pt.getAttribute("cx")), Number(ar.getAttribute("y2")) - Number(pt.getAttribute("cy")));
+    expect(gap).toBeGreaterThanOrEqual(7);
+    const g = frame(c("return [grid([[0, 0], [0, 0]], { arrows: [['up', null], [null, null]], agents: [{ r: 0, c: state.a > 5 ? 1 : 0 }] })];")).doc;
+    const ag = g.querySelector("svg .st-agent")!;
+    expect(Number(ag.getAttribute("r"))).toBeLessThan(20);
+  });
+
+  it("draws a line lying under another wide and faint, and hides y numbers on a strip of dots", () => {
+    const c = (draw: string) => ({ title: "t", state: { a: 1 }, components: [{ id: "s", type: "slider", label: "a", key: "a", min: 0, max: 2, step: 1 },
+      { id: "c1", type: "chart", title: "C", x: [0, 6], y: [-1, 8], draw }] });
+    const lines = frame(c("return [line([[0, 1], [6, 4 * state.a]], { color: 'orange' }), line([[0, 1], [6, 4 * state.a]], { color: 'gray', dashed: true })];")).doc.querySelectorAll("svg .mk-line");
+    expect(lines[0].getAttribute("stroke-width")).toBe("7");
+    expect(lines[1].getAttribute("stroke-width")).toBeNull();
+    const strip = frame(c("return [points([[1, 1], [2, 1], [3 * state.a, 1]]), points([[1, 0], [2, 0]], { color: 'orange' })];")).doc;
+    expect(strip.querySelectorAll("svg .ax-grid")).toHaveLength(0);
+    const scatter = frame(c("return [points([[1, 1], [2, 3], [3 * state.a, 5], [4, 2]])];")).doc;
+    expect(scatter.querySelectorAll("svg .ax-grid").length).toBeGreaterThan(0);
+  });
+});
+
+describe("playground: zero bars, cell names, equal scales, byte units", () => {
+  const slider = { id: "s", type: "slider", label: "a", key: "a", min: 0, max: 2, step: 1 };
+  const one = (comp: Record<string, unknown>) => ({ title: "t", state: { a: 1 }, components: [slider, comp] });
+  const chart = (draw: string, extra: Record<string, unknown> = {}) => one({ id: "c1", type: "chart", title: "C", draw, ...extra });
+
+  it("draws a bar of 0 as a thin stub, so the series still shows", () => {
+    const { doc } = frame(chart("return [bars([[0, 0.5 * state.a], [1, 0]], { label: 'p' })];", { x: [-0.5, 1.5], y: [0, 1] }));
+    const h = [...doc.querySelectorAll("svg .mk-bar")].map((r) => Number(r.getAttribute("height")));
+    expect(h[1]).toBe(2);
+  });
+
+  it("names heatmap cells with cellLabels, above their values", () => {
+    const { doc } = frame(chart("return [heatmap([[3 * state.a, 1], [2, 4]], { showValues: true, cellLabels: [['TP', 'FN'], ['FP', 'TN']] })];", { x: [0, 2], y: [0, 2] }));
+    const names = [...doc.querySelectorAll("svg .mk-cellname")].map((t) => t.textContent);
+    expect(names).toEqual(["TP", "FN", "FP", "TN"]);
+    expect([...doc.querySelectorAll("svg .mk-cellval:not(.mk-cellname)")].map((t) => t.textContent)).toEqual(["3", "1", "2", "4"]);
+    expect(validate(chart("return [heatmap([[state.a]], { cellLabels: 'TP' })];", { x: [0, 1], y: [0, 1] })).errors.join(" ")).toMatch(/cellLabels must be a 2D array/);
+  });
+
+  it("draws a plane with the same range on both axes at equal scales", () => {
+    const structures = require("../shared/playground/structures.cjs");
+    const marks = [{ type: "points", points: [[1, 1]] }];
+    const f = structures.chartFrame({ x: [-4, 4], y: [-4, 4] }, marks);
+    const ux = (f.sx(1) - f.sx(0)), uy = (f.sy(0) - f.sy(1));
+    expect(Math.abs(ux - uy)).toBeLessThan(0.01);
+    expect(f.dom.x[0]).toBeLessThan(-4);
+    expect(structures.chartFrame({ x: [-4, 4], y: [-4, 4], aspect: "free" }, marks).dom.x).toEqual([-4, 4]);
+    expect(structures.chartFrame({ x: [0, 1], y: [0, 1] }, marks).dom.x).toEqual([0, 1]);  // a [0, 1] square is not a plane
+    expect(structures.chartFrame({ x: [-4, 4], y: [-4, 4] }, [{ type: "bars", items: [[0, 1]] }]).dom.x).toEqual([-4, 4]);
+  });
+
+  it("moves a byte readout to the next unit from 10,000 up", () => {
+    const ro = (value: string, label: string) => {
+      const d = frame(one({ id: "r", type: "readout", label, value })).doc;
+      return [d.querySelector(".pg-readout-value")!.textContent, d.querySelector(".pg-readout-label")!.textContent];
+    };
+    expect(ro("return 20480 * state.a;", "Cache (KB)")).toEqual(["20", "Cache (MB)"]);
+    expect(ro("return 512 * state.a;", "Cache (KB)")).toEqual(["512", "Cache (KB)"]);
+    expect(ro("return 3 * 1024 ** 3 * state.a;", "Size (bytes)")).toEqual(["3", "Size (GB)"]);
+    expect(ro("return 20480 * state.a;", "Tokens")).toEqual(["20,480", "Tokens"]);
   });
 });

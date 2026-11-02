@@ -204,6 +204,7 @@
         if (v.length * v[0].length > 2500) return `${at} (heatmap) has too many cells (max 2500)`;
         if (!v.every((r) => r.every((x) => typeof x === 'number'))) return `${at} (heatmap) values must be numbers`;
         if ((m.x !== undefined && !isRange(m.x)) || (m.y !== undefined && !isRange(m.y))) return `${at} (heatmap) x/y must be [min, max]`;
+        if (m.cellLabels !== undefined && !(Array.isArray(m.cellLabels) && m.cellLabels.every((r) => Array.isArray(r)))) return `${at} (heatmap) cellLabels must be a 2D array of names, one per cell`;
       }
       if (m.type === 'pie') {
         if (!Array.isArray(m.values) || !m.values.length || m.values.length > 24) return `${at} (pie) values must be an array of 1-24 numbers`;
@@ -213,7 +214,7 @@
       const se = checkStructure(m, at);
       if (se) return se;
       if (m.draggable && !['point', 'points', 'graph', 'grid', 'shape'].includes(m.type)) return `${at}: only point, points, shapes (node, box, circle, diamond), graph (manual layout) and grid agents can be draggable`;
-      const { text, color, label, labels, xLabels, yLabels, id, from, to, ...nums } = m;
+      const { text, color, label, labels, xLabels, yLabels, cellLabels, id, from, to, ...nums } = m;
       const bad = findBadValue(nums, m.type);
       if (bad) return `${at}: ${bad}`;
     }

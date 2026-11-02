@@ -8,6 +8,32 @@
   const GRID_COLORS = [null, 'gray', 'green', 'red', 'blue', 'orange', 'purple', 'teal', 'pink'];
   const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
   const cut = (s, max) => { s = String(s); return s.length > max ? s.slice(0, Math.max(1, max - 1)) + '…' : s; };
+  // A label in room for maxChars characters (charW px each): a slightly long one is squeezed up to 25% narrower (SVG
+  // textLength) before it is cut with …, so 'newest low' fits where 'newest …' was drawn. Returns [text, extra attrs].
+  const SQUEEZE = 0.75;
+  function fitText(s, maxChars, charW) {
+    s = String(s);
+    if (s.length <= maxChars) return [s, ''];
+    const squeeze = ` textLength="${Math.round(maxChars * charW)}" lengthAdjust="spacingAndGlyphs"`;
+    return [s.length * SQUEEZE <= maxChars ? s : cut(s, Math.floor(maxChars / SQUEEZE)), squeeze];
+  }
+  // A number in maxChars characters: fewer decimals and no leading zero (-0.53 -> -.53 -> -.5), then 12k / 3.4M, and
+  // only then cut. A non-zero value never shows as 0, and one below 1 is never rounded to a whole number (-0.64 is not
+  // -1); with no room left it is cut (the tooltip keeps the exact value).
+  function fitNum(v, maxChars, fmt) {
+    const s = fmt(v);
+    if (s.length <= maxChars || typeof v !== 'number' || !Number.isFinite(v)) return cut(s, maxChars);
+    for (const d of Math.abs(v) < 1 ? [3, 2, 1] : [3, 2, 1, 0]) {
+      const t = String(Number(v.toFixed(d))).replace(/^(-?)0\./, '$1.');
+      if (t.length <= maxChars && (Number(t) !== 0 || v === 0)) return t;
+    }
+    const a = Math.abs(v);
+    for (const [u, sfx] of [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'k']]) {
+      if (a < u) continue;
+      for (const d of [1, 0]) { const t = String(Number((v / u).toFixed(d))) + sfx; if (t.length <= maxChars) return t; }
+    }
+    return cut(s, maxChars);
+  }
   const attrs = (c) => `${c.cls}"${c.style ? ` style="${c.style}"` : ''}`;
   const maxAbs = (vals) => vals.reduce((m, v) => (Number.isFinite(v) ? Math.max(m, Math.abs(v)) : m), 0) || 1;
 
@@ -43,9 +69,99 @@
     return [lo - pad, hi + pad];
   }
 
+  // Added Nov 2 (rubric eval rows 13, 14, 17, 25): a fixed range sized for a slider's extreme left the data in a sliver
+  // (gradient bars, 8-bit errors) or a heatmap covering a third of x. The range now follows the data in view:
+  // - a chart with a heatmap: each fixed axis shrinks to what is drawn (the heatmap's extent and the data on it);
+  // - otherwise the y range zooms in by halves (1/4 .. 1/64, on a grid of eighth steps, so it moves rarely and in
+  //   whole steps) when the data fits in a quarter of it (under ~22% with padding; less squashed data reads fine).
+  // Never: spec.zoom === false, draggable marks or onDrag (the axis would move under the pointer), diagrams, a y range
+  // starting at 0 (sizes: memory, cost, counts, probabilities growing with a slider are the lesson; 15 of the 45 charts
+  // zoomed in a first replay were these), data with no height (all zero / flat). What counts: lines of 3+ points (a 2-point
+  // line is a guide drawn across the chart), areas and bars from 0, dots, rules, rects, arrows, heatmaps; not text
+  // (placeText keeps it inside). Returns {x?, y?} ranges to draw with.
+  const ZOOMABLE = new Set(['line', 'area', 'bars', 'points', 'point', 'hline', 'vline', 'rect', 'arrow', 'text', 'heatmap']);
+  const ZOOM_MIN = 2, ZOOM_MAX = 6;  // zoom to 1/4 .. 1/64 of the range
+  function dataExtent(marks, axis) {
+    let lo = Infinity, hi = -Infinity;
+    const see = (v) => { if (Number.isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } };
+    const i = axis === 'x' ? 0 : 1;
+    for (const m of marks) {
+      if (m.type === 'heatmap') heatExtent(m, axis).forEach(see);
+      else if (m.type === 'line') { if ((m.points || []).length > 2) m.points.forEach((p) => see(p[i])); }
+      else if (m.type === 'area') { (m.points || []).forEach((p) => see(p[i])); if (axis === 'y') see(0); }
+      else if (m.type === 'points') (m.points || []).forEach((p) => see(p[i]));
+      else if (m.type === 'bars') (m.items || []).forEach((p) => { if (axis === 'y') { see(0); see(p[1]); } else { see(p[0] - 0.5); see(p[0] + 0.5); } });
+      else if (m.type === 'point') see(m[axis]);
+      else if (m.type === 'hline') { if (axis === 'y') see(m.y); }
+      else if (m.type === 'vline') { if (axis === 'x') see(m.x); }
+      else if (m.type === 'rect' || m.type === 'arrow') [m[axis + '1'], m[axis + '2']].forEach(see);
+    }
+    return lo <= hi ? [lo, hi] : null;
+  }
+  function zoomRange(spec, marks) {
+    const out = {};
+    if (spec.zoom === false || spec.onDrag || !marks.length || marks.some((m) => !m || !ZOOMABLE.has(m.type) || m.draggable)) return out;
+    const fixed = (r) => Array.isArray(r) && r.length === 2 && Number.isFinite(r[0]) && Number.isFinite(r[1]) && r[1] > r[0];
+    const inside = (e, r) => (e ? [Math.max(e[0], r[0]), Math.min(e[1], r[1])] : null);
+    if (marks.some((m) => m.type === 'heatmap')) {
+      for (const axis of ['x', 'y']) {
+        const r = spec[axis], e = fixed(r) && inside(dataExtent(marks, axis), r);
+        if (e && e[1] > e[0] && e[1] - e[0] < 0.9 * (r[1] - r[0])) out[axis] = e;
+      }
+      return out;
+    }
+    const r = spec.y;
+    if (!fixed(r) || r[0] === 0) return out;
+    const e = inside(dataExtent(marks, 'y'), r), F = r[1] - r[0];
+    if (!e || e[1] - e[0] < F / 2 ** ZOOM_MAX) return out;
+    for (let k = ZOOM_MAX; k >= ZOOM_MIN; k--) {
+      const span = F / 2 ** k, step = span / 8, pad = 0.06 * span;
+      if (e[1] - e[0] + 2 * pad > span) continue;
+      const base = r[0] + Math.floor((e[0] - pad - r[0]) / step) * step, eps = 1e-9 * F;
+      for (let j = 0; j < 8 && !out.y; j++) {
+        let lo = Math.max(r[0], base - j * step);
+        if (lo + span > r[1]) lo = r[1] - span;
+        // padding at an end is needed only where the range could go further (not at the fixed range's own end)
+        const okLo = lo <= e[0] - pad + eps || lo <= r[0] + eps, okHi = lo + span >= e[1] + pad - eps || lo + span >= r[1] - eps;
+        if (okLo && okHi) out.y = [lo, lo + span];
+      }
+      if (out.y) break;
+    }
+    return out;
+  }
+
+  // Added Nov 2 (rubric eval row 15): a plane drawn with the same range on both axes (vectors, PCA directions, query and
+  // key arrows) was stretched 1.6x sideways, so perpendicular lines didn't look perpendicular. Equal scales when
+  // aspect: 'equal', or by default when x and y are the same fixed range around 0 (lo < 0 < hi) and every mark is a
+  // plotted one (no bars, heatmap, grid, diagram). aspect: 'free' turns it off. Such charts don't zoom.
+  const PLANE = new Set(['line', 'area', 'points', 'point', 'hline', 'vline', 'rect', 'arrow', 'text']);
+  function equalAspect(spec, marks) {
+    if (spec.aspect === 'equal') return true;
+    if (spec.aspect !== undefined) return false;
+    const x = spec.x, y = spec.y;
+    return Array.isArray(x) && Array.isArray(y) && x.length === 2 && y.length === 2 && x[0] === y[0] && x[1] === y[1] &&
+      x[0] < 0 && x[1] > 0 && marks.length > 0 && marks.every((m) => m && PLANE.has(m.type));
+  }
+
   // { dom, M, hasAxes, sx, sy, plot } for a chart spec drawing these marks (the rules components.cjs renders with).
+  // The chart's axis names, minus one a text mark already writes word for word (Nov 2, rubric eval row 1: 'L(w)' was
+  // both the y-axis name and the curve's label). The text mark stays: it is placed by the section, often on its curve.
+  const Y_NAME_ROOM = 10;
+  function axisNames(spec, marks) {
+    const said = new Set(marks.filter((m) => m && m.type === 'text').map((m) => String(m.text == null ? '' : m.text).trim().toLowerCase()));
+    const keep = (v) => (v !== undefined && v !== null && String(v).trim() && !said.has(String(v).trim().toLowerCase()) ? String(v) : '');
+    return { x: keep(spec.xLabel), y: keep(spec.yLabel) };
+  }
+
   function chartFrame(spec, marks) {
     const dom = { x: spec.x || autoDomain(marks, 'x'), y: spec.y || autoDomain(marks, 'y') };
+    // Bars on a fixed y range get 4% room above it, so a bar as tall as the range (a probability of 1 in [0, 1]) doesn't
+    // touch the frame and look cut off (Nov 1: 24 of 206 playgrounds). Ticks and the checker's range rules still use spec.y.
+    const equal = equalAspect(spec, marks);
+    const zoom = equal ? {} : zoomRange(spec, marks);
+    if (zoom.x) dom.x = zoom.x;
+    if (zoom.y) dom.y = zoom.y;
+    else if (spec.y && spec.y[1] > 0 && marks.some((m) => m.type === 'bars')) dom.y = [spec.y[0], spec.y[1] + 0.04 * (spec.y[1] - spec.y[0])];
     // No axes for charts made only of pie/structural/text marks, or with a grid; `axes: true/false` overrides.
     const auto = !(marks.some((m) => m.type !== 'text') &&
       (marks.every((m) => AXISLESS.has(m.type)) || marks.some((m) => m.type === 'grid')));
@@ -53,9 +169,61 @@
     const hm = marks.find((m) => m.type === 'heatmap' && (m.xLabels || m.yLabels));
     const M = hasAxes ? { ...MARGIN } : { l: 12, r: 12, t: 12, b: 12 };
     if (hasAxes && hm && hm.yLabels) M.l = Math.min(140, Math.max(MARGIN.l, 14 + 7.5 * Math.max(...hm.yLabels.map((l) => String(l).length))));
+    // The y-axis name is drawn above the plot's top-left corner (Nov 2, rubric eval rows 17, 21, 25): inside the plot it sat
+    // on curves, text marks and heatmap cells.
+    if (hasAxes && axisNames(spec, marks).y) M.t = MARGIN.t + Y_NAME_ROOM;
+    if (equal) {
+      // one x unit as long as one y unit: the axis with spare room gets more range, centred (the plot keeps its size)
+      const pw = W - M.l - M.r, ph = H - M.t - M.b, xs = dom.x[1] - dom.x[0], ys = dom.y[1] - dom.y[0];
+      const grow = (r, span) => { const c = (r[0] + r[1]) / 2; return [c - span / 2, c + span / 2]; };
+      if (pw / xs > ph / ys) dom.x = grow(dom.x, pw * ys / ph); else dom.y = grow(dom.y, ph * xs / pw);
+    }
     const sx = (v) => M.l + (v - dom.x[0]) / (dom.x[1] - dom.x[0]) * (W - M.l - M.r);
     const sy = (v) => H - M.b - (v - dom.y[0]) / (dom.y[1] - dom.y[0]) * (H - M.t - M.b);
     return { dom, M, hasAxes, sx, sy, plot: { x0: M.l, y0: M.t, x1: W - M.r, y1: H - M.b } };
+  }
+
+  // A mark's drawing box in px: the plot, or m.box = [x0, y0, x1, y1] as fractions of it (from top-left).
+  function markBox(m, plot) {
+    const f = Array.isArray(m && m.box) && m.box.length === 4 ? m.box : [0, 0, 1, 1];
+    return { x0: plot.x0 + f[0] * (plot.x1 - plot.x0), y0: plot.y0 + f[1] * (plot.y1 - plot.y0),
+      x1: plot.x0 + f[2] * (plot.x1 - plot.x0), y1: plot.y0 + f[3] * (plot.y1 - plot.y0) };
+  }
+
+  // Added in Explainer Studio (Nov 2, rubric eval row 18): hand-placed graph nodes (layout 'manual') shrink until no two
+  // circles touch and no name drawn under a node lands on the node (or its value) below it. Before, the radius came
+  // from the node count only, so a beam-search tree with rows 36 px apart drew 36 px circles on top of each other.
+  // Returns {pos, r, clash}: clash lists what still collides at GRAPH_MIN_R (the checker reports it) as
+  // {i, j, kind: 'nodes' | 'name' | 'names', need} with need = the px distance (dy, or dx for 'names') that would fit.
+  const GRAPH_MIN_R = 6;
+  const graphNameBelow = (nd) => nd.label !== undefined && String(nd.label).length > 3;
+  const graphNameHalf = (nd) => Math.min(12, String(nd.label).length) * 6.5 / 2;  // fitText(label, 12, 6.5)
+  function manualGraph(m, sx, sy, b) {
+    const N = m.nodes.length;
+    const pos = m.nodes.map((nd) => [sx(nd.x), sy(nd.y)]);
+    const r0 = m.r || clamp(Math.min(b.x1 - b.x0, b.y1 - b.y0) / (Math.ceil(Math.sqrt(N)) * 2.8), 7, 18);
+    const top = m.showValues ? 14 : 0;  // a value drawn above a node takes ~14 px
+    const limits = [];                  // {i, j, kind, max: the largest r that fits, need}
+    const nameRows = [];
+    for (let i = 0; i < N; i++) {
+      for (let j = i + 1; j < N; j++) {
+        const dx = Math.abs(pos[j][0] - pos[i][0]), dy = pos[j][1] - pos[i][1], d = Math.hypot(dx, dy);
+        limits.push({ i, j, kind: 'nodes', max: (d - 3) / 2, need: 2 * GRAPH_MIN_R + 3 });
+        // the name under the upper node: from y + r + 3 to y + r + 16 (baseline at y + r + 13)
+        const [up, lo, gap] = dy >= 0 ? [i, j, dy] : [j, i, -dy];
+        if (gap > 0 && graphNameBelow(m.nodes[up]) && dx < graphNameHalf(m.nodes[up]) + r0) {
+          limits.push({ i: up, j: lo, kind: 'name', max: (gap - 17 - top) / 2, need: 17 + top + 2 * GRAPH_MIN_R });
+        }
+        // two names side by side: moving with their nodes, no radius separates them
+        if (graphNameBelow(m.nodes[i]) && graphNameBelow(m.nodes[j]) && Math.abs(dy) < 14) {
+          const room = graphNameHalf(m.nodes[i]) + graphNameHalf(m.nodes[j]) + 4;
+          if (dx < room) nameRows.push({ i, j, kind: 'names', need: room });
+        }
+      }
+    }
+    const r = Math.max(GRAPH_MIN_R, Math.min(r0, ...limits.map((l) => l.max)));
+    const clash = [...limits.filter((l) => l.max < GRAPH_MIN_R), ...nameRows];
+    return { pos, r, clash };
   }
 
   // ------------------------------------------------------------------ graph
@@ -63,11 +231,10 @@
     const { n, esc, fmt, colorAttr, tip, hit } = ctx;
     const b = ctx.box(m), N = m.nodes.length;
     const layered = m.layout === 'layers' || (!m.layout && m.nodes.some((nd) => nd.layer !== undefined));
-    const pos = new Array(N);
-    let span = 1;
+    let pos = new Array(N);
+    let span = 1, manualR = 0;
     if (m.layout === 'manual') {
-      m.nodes.forEach((nd, i) => { pos[i] = [ctx.sx(nd.x), ctx.sy(nd.y)]; });
-      span = Math.ceil(Math.sqrt(N));
+      ({ pos, r: manualR } = manualGraph(m, ctx.sx, ctx.sy, b));
     } else if (layered) {
       const layers = [...new Set(m.nodes.map((nd) => nd.layer || 0))].sort((a, c) => a - c);
       const cols = layers.map((l) => m.nodes.map((nd, i) => ((nd.layer || 0) === l ? i : -1)).filter((i) => i >= 0));
@@ -83,7 +250,7 @@
       m.nodes.forEach((nd, i) => { const a = -Math.PI / 2 + 2 * Math.PI * i / N; pos[i] = [cx + R * Math.cos(a), cy + R * Math.sin(a)]; });
       span = Math.max(3, N / 2.2);
     }
-    const r = m.r || clamp(Math.min(b.x1 - b.x0, b.y1 - b.y0) / (span * 2.8), 7, 18);
+    const r = manualR || m.r || clamp(Math.min(b.x1 - b.x0, b.y1 - b.y0) / (span * 2.8), 7, 18);
 
     const wMax = maxAbs(m.edges.map((e) => e[2]));
     const cx0 = pos.reduce((t, p) => t + p[0], 0) / N, cy0 = pos.reduce((t, p) => t + p[1], 0) / N;
@@ -135,7 +302,7 @@
       if (label) {
         out += label.length <= 3
           ? `<text class="st-label" x="${n(x)}" y="${n(y)}" text-anchor="middle" dy="0.35em">${esc(label)}</text>`
-          : `<text class="st-label" x="${n(x)}" y="${n(y + r + 13)}" text-anchor="middle">${esc(cut(label, 12))}</text>`;
+          : ((t) => `<text class="st-label" x="${n(x)}" y="${n(y + r + 13)}" text-anchor="middle"${t[1]}>${esc(t[0])}</text>`)(fitText(label, 12, 6.5));
       }
       if (m.showValues && Number.isFinite(nd.value)) {
         out += `<text class="st-small" x="${n(x)}" y="${n(y - r - 5)}" text-anchor="middle">${esc(fmt(nd.value))}</text>`;
@@ -183,7 +350,7 @@
       const on = hl.has(i) || x.nd.active;
       out += `<rect class="st-box${x.nd.color !== undefined ? ' is-colored' : ''}${on ? ' is-on' : ''} ${attrs(c)} x="${n(X(i) - w / 2)}" y="${n(Y(i) - bh / 2)}" width="${n(w)}" height="${n(bh)}" rx="6"` +
         `${tip(`${label || `node ${i}`}${x.nd.value !== undefined ? ` (${fmt(x.nd.value)})` : ''}`)}${hit(m, i, 'node')}/>`;
-      if (label) out += `<text class="st-label" x="${n(X(i))}" y="${n(Y(i))}" text-anchor="middle" dy="0.35em">${esc(cut(label, Math.floor((w - 8) / 6.6)))}</text>`;
+      if (label) { const [t, sq] = fitText(label, Math.floor((w - 8) / 6.6), 6.6); out += `<text class="st-label" x="${n(X(i))}" y="${n(Y(i))}" text-anchor="middle" dy="0.35em"${sq}>${esc(t)}</text>`; }
     });
     return out;
   }
@@ -207,9 +374,10 @@
       if (m.rowLabels) x += ROWLAB;
       const left = x + PAD, top = cy - h / 2;
       const name = m.label === undefined ? 'M' : String(m.label);
-      if (m.label !== undefined) out += `<text class="st-mlabel" x="${n(left + C * cs / 2)}" y="${n(top - 8 - (m.colLabels ? 15 : 0))}" text-anchor="middle">${esc(cut(m.label, 10))}</text>`;
-      (m.colLabels || []).slice(0, C).forEach((l, c) => { out += `<text class="st-small" x="${n(left + (c + 0.5) * cs)}" y="${n(top - 5)}" text-anchor="middle">${esc(cut(l, Math.max(2, Math.floor(cs / 6.5))))}</text>`; });
-      (m.rowLabels || []).slice(0, R).forEach((l, r) => { out += `<text class="st-small" x="${n(left - 7)}" y="${n(top + (r + 0.5) * cs)}" text-anchor="end" dy="0.35em">${esc(cut(l, 6))}</text>`; });
+      // the matrix name may use the matrix's whole width (with its brackets), not a fixed 10 characters
+      if (m.label !== undefined) { const [t, sq] = fitText(m.label, Math.max(10, Math.floor((C * cs + 2 * PAD - 4) / 7)), 7); out += `<text class="st-mlabel" x="${n(left + C * cs / 2)}" y="${n(top - 8 - (m.colLabels ? 15 : 0))}" text-anchor="middle"${sq}>${esc(t)}</text>`; }
+      (m.colLabels || []).slice(0, C).forEach((l, c) => { const [t, sq] = fitText(l, Math.max(2, Math.floor(cs / 6.5)), 6.5); out += `<text class="st-small" x="${n(left + (c + 0.5) * cs)}" y="${n(top - 5)}" text-anchor="middle"${sq}>${esc(t)}</text>`; });
+      (m.rowLabels || []).slice(0, R).forEach((l, r) => { const [t, sq] = fitText(l, 6, 6.5); out += `<text class="st-small" x="${n(left - 7)}" y="${n(top + (r + 0.5) * cs)}" text-anchor="end" dy="0.35em"${sq}>${esc(t)}</text>`; });
       const vMax = maxAbs(m.values.flat());
       const hr = new Set(m.highlightRows || []), hc = new Set(m.highlightCols || []);
       const hcell = new Set((m.highlightCells || []).map((p) => `${p[0]},${p[1]}`));
@@ -218,7 +386,7 @@
         const heat = m.heat ? colorAttr(v >= 0 ? (m.posColor || 'blue') : (m.negColor || 'red'), 'fill') : null;
         out += `<rect class="st-cell${on ? ' is-on' : ''}${heat ? ` ${heat.cls}` : ''}"${heat && heat.style ? ` style="${heat.style}"` : ''}${heat ? ` fill-opacity="${n(0.1 + 0.75 * Math.abs(v) / vMax)}"` : ''} x="${n(left + c * cs)}" y="${n(top + r * cs)}" width="${n(cs)}" height="${n(cs)}"` +
           `${tip(`${name}[${r + 1},${c + 1}] = ${fmt(v)}`)}${hit(m, r * C + c, 'cell')}/>`;
-        out += `<text class="st-num${on ? ' is-on' : ''}" x="${n(left + (c + 0.5) * cs)}" y="${n(top + (r + 0.5) * cs)}" text-anchor="middle" dy="0.35em" font-size="${n(fs)}">${esc(cut(fmt(v), Math.max(3, Math.floor(cs / (fs * 0.55)))))}</text>`;
+        out += `<text class="st-num${on ? ' is-on' : ''}" x="${n(left + (c + 0.5) * cs)}" y="${n(top + (r + 0.5) * cs)}" text-anchor="middle" dy="0.35em" font-size="${n(fs)}">${esc(fitNum(v, Math.max(3, Math.floor(cs / (fs * 0.55))), fmt))}</text>`;
       }));
       const right = left + C * cs;
       out += `<path class="st-bracket" d="M${n(left - 2)},${n(top - 3)} h-5 v${n(h + 6)} h5 M${n(right + 2)},${n(top - 3)} h5 v${n(h + 6)} h-5"/>`;
@@ -262,7 +430,7 @@
       const hl = new Set(m.highlight || []);
       const win = Array.isArray(m.window) ? m.window : null;
       const maxChars = Math.max(2, Math.floor((g.tw - 6) / 7));
-      if (m.label !== undefined) out += `<text class="st-mlabel" x="${n(b.x0 + labW - 8)}" y="${n(g.y + g.th / 2)}" text-anchor="end" dy="0.35em">${esc(cut(m.label, 8))}</text>`;
+      if (m.label !== undefined) { const [t, sq] = fitText(m.label, 8, 6.5); out += `<text class="st-mlabel" x="${n(b.x0 + labW - 8)}" y="${n(g.y + g.th / 2)}" text-anchor="end" dy="0.35em"${sq}>${esc(t)}</text>`; }
       m.tokens.forEach((tok, k) => {
         const on = hl.has(k) || (win && k >= win[0] && k <= win[1]);
         const c = Array.isArray(m.colors) && m.colors[k] !== undefined && m.colors[k] !== null ? colorAttr(m.colors[k], 'fill') : null;
@@ -273,8 +441,9 @@
         const val = m.values && m.values[k] !== undefined ? m.values[k] : undefined;
         out += `<rect class="st-tok${on ? ' is-on' : ''}${c ? ` is-colored ${c.cls}` : ''}"${c && c.style ? ` style="${c.style}"` : ''} x="${n(x)}" y="${n(g.y)}" width="${n(g.tw)}" height="${n(g.th)}" rx="6"` +
           `${tip(`${tok}${val !== undefined ? `: ${fmt(val)}` : ''}`)}${hit(m, k, 'item')}/>`;
-        out += `<text class="st-label" x="${n(g.cx[k])}" y="${n(g.y + g.th / 2)}" text-anchor="middle" dy="0.35em">${esc(cut(tok, maxChars))}</text>`;
-        if (val !== undefined) out += `<text class="st-small" x="${n(g.cx[k])}" y="${n(g.y + g.th + 12)}" text-anchor="middle">${esc(cut(fmt(val), maxChars + 1))}</text>`;
+        const [tt, tsq] = fitText(tok, maxChars, 7);
+        out += `<text class="st-label" x="${n(g.cx[k])}" y="${n(g.y + g.th / 2)}" text-anchor="middle" dy="0.35em"${tsq}>${esc(tt)}</text>`;
+        if (val !== undefined) out += `<text class="st-small" x="${n(g.cx[k])}" y="${n(g.y + g.th + 12)}" text-anchor="middle">${esc(fitNum(val, maxChars + 1, fmt))}</text>`;
       });
     });
     return out;
@@ -315,8 +484,10 @@
     (m.agents || []).forEach((ag, i) => {
       const col = colorAttr(ag.color !== undefined ? ag.color : 'purple', 'fill');
       const drag = m.draggable ? ` data-drag="${esc(m.id || '')}" data-index="${i}"` : '';
-      // with a label in the cell, the agent sits in the top-left corner so the label stays readable
-      const lab = m.labels && m.labels[ag.r][ag.c] !== null && m.labels[ag.r][ag.c] !== undefined && m.labels[ag.r][ag.c] !== '';
+      // with a label or an arrow in the cell, the agent sits in the top-left corner so they stay readable (an arrow
+      // under the agent: rubric eval row 8, Nov 2)
+      const lab = (m.labels && m.labels[ag.r] && m.labels[ag.r][ag.c] !== null && m.labels[ag.r][ag.c] !== undefined && m.labels[ag.r][ag.c] !== '') ||
+        !!(m.arrows && m.arrows[ag.r] && m.arrows[ag.r][ag.c]);
       const x0 = Math.min(px(ag.c), px(ag.c + 1)), y0 = Math.min(py(ag.r), py(ag.r + 1));
       const [ax, ay, ar] = lab ? [x0 + cellPx * 0.22, y0 + cellPx * 0.22, cellPx * 0.16] : [x0 + cellPx / 2, y0 + cellPx / 2, cellPx * 0.3];
       out += `<circle class="st-agent ${attrs(col)} cx="${n(ax)}" cy="${n(ay)}" r="${n(ar)}"${drag}${tip(`agent (${ag.r}, ${ag.c})`)}/>`;
@@ -416,6 +587,18 @@
       d = `M${n(x1)},${n(y1)} Q${n(qx)},${n(qy)} ${n(x2)},${n(y2)}`;
       lx = 0.25 * x1 + 0.5 * qx + 0.25 * x2; ly = 0.25 * y1 + 0.5 * qy + 0.25 * y2;
       path = { x1, y1, qx, qy, x2, y2 };  // the quadratic curve, so the checker can trace where the link runs
+      // Added Nov 2 (rubric eval row 14): a label on a short link between close shapes sat on them ('(ŷ−y)²' squeezed
+      // into a 20 px gap). It moves above the two shapes (or below them) when that spot is free of every shape.
+      const text = m.label === undefined || m.label === null ? '' : String(m.label);
+      if (text) {
+        const w = text.length * 6.5, box = (y) => ({ x0: lx - w / 2, x1: lx + w / 2, y0: y - 14, y1: y - 2 });
+        const hits = (bx) => [...geoms.values()].some((g) => Math.min(bx.x1, g.cx + g.hw) - Math.max(bx.x0, g.cx - g.hw) > 2 &&
+          Math.min(bx.y1, g.cy + g.hh) - Math.max(bx.y0, g.cy - g.hh) > 2);
+        if (hits(box(ly))) {
+          const free = [Math.min(a.cy - a.hh, b.cy - b.hh), Math.max(a.cy + a.hh, b.cy + b.hh) + 15].find((y) => !hits(box(y)));
+          if (free !== undefined) ly = free;
+        }
+      }
     }
     return { d, lx, ly, self: a === b, path };
   }
@@ -503,9 +686,60 @@
     return out;
   }
 
+  // Added Nov 2 (rubric eval rows 12, 28): a series' name (opts.label) was shown only on hover, so two bar series in
+  // grey and orange had nothing saying which was which. When 2+ named series (line/area/bars/points, one colour each)
+  // differ in colour, a small legend is drawn in the plot corner with the fewest marks under it. A name already
+  // written as a text mark is left out. Returns {items: [{m, label, color}], x, y, w, h, rowH} in px, or null.
+  // components.cjs draws it; the validator's legend check counts a chart with one as named.
+  const LEGEND_TYPES = new Set(['line', 'area', 'bars', 'points']);
+  function seriesLegend(marks, f) {
+    const one = (m) => (m.color !== undefined ? m.color : typeof m.colors === 'string' ? m.colors : Array.isArray(m.colors) ? null : 'blue');
+    const all = [], keys = new Set();
+    for (const m of marks) {
+      if (!LEGEND_TYPES.has(m.type) || typeof m.label !== 'string' || !m.label.trim() || one(m) === null) continue;
+      const key = JSON.stringify(one(m));
+      if (keys.has(key)) continue;
+      keys.add(key);
+      all.push({ m, label: cut(m.label.trim(), 18), color: one(m) });
+    }
+    if (all.length < 2) return null;
+    const written = new Set(marks.filter((m) => m.type === 'text').map((m) => String(m.text == null ? '' : m.text).trim().toLowerCase()));
+    const items = all.filter((it) => !written.has(it.m.label.trim().toLowerCase())).slice(0, 6);
+    if (!items.length) return null;
+    const rowH = 16, w = 30 + Math.max(...items.map((it) => it.label.length)) * 6.6, h = items.length * rowH + 8;
+    const { plot } = f;
+    if (w > (plot.x1 - plot.x0) * 0.6 || h > (plot.y1 - plot.y0) * 0.6) return null;
+    // what lies under a box: line pieces, dots, bars (with ~16 px above them for their values)
+    const segs = lineSegments(marks, f);
+    const dots = [], rects = [];
+    for (const m of marks) {
+      if (m.type === 'points' && Array.isArray(m.points)) for (const p of m.points) if (Array.isArray(p)) dots.push([f.sx(p[0]), f.sy(p[1])]);
+      if (m.type === 'point') dots.push([f.sx(m.x), f.sy(m.y)]);
+      if (m.type === 'bars' && Array.isArray(m.items)) {
+        for (const p of m.items) {
+          if (!Array.isArray(p)) continue;
+          const x = f.sx(p[0]), y0 = f.sy(Math.max(f.dom.y[0], Math.min(0, f.dom.y[1]))), y1 = f.sy(p[1]);
+          rects.push({ x0: x - 10, x1: x + 10, y0: Math.min(y0, y1) - 16, y1: Math.max(y0, y1) });
+        }
+      }
+    }
+    const cost = (b) => segs.filter((s) => segHitsBox(s[0], s[1], s[2], s[3], b)).length * 3 +
+      dots.filter(([x, y]) => x > b.x0 - 4 && x < b.x1 + 4 && y > b.y0 - 4 && y < b.y1 + 4).length +
+      rects.filter((r) => Math.min(r.x1, b.x1) > Math.max(r.x0, b.x0) && Math.min(r.y1, b.y1) > Math.max(r.y0, b.y0)).length * 5;
+    const top = plot.y0 + 6;
+    const corners = [[plot.x1 - w - 6, top], [plot.x0 + 6, top], [plot.x1 - w - 6, plot.y1 - h - 6], [plot.x0 + 6, plot.y1 - h - 6]];
+    let best = null;
+    for (const [x, y] of corners) {
+      const c = cost({ x0: x, x1: x + w, y0: y, y1: y + h });
+      if (!best || c < best.c) best = { x, y, c };
+    }
+    return { items, x: best.x, y: best.y, w, h, rowH };
+  }
+
   const structures = {
-    graph, tree, matrices, sequences, grid, gridExtent, cellAt, shape, shapeGeom, edgePoint, labelRoom, cut, link, linkGeom,
-    W, H, MARGIN, STRUCT, AXISLESS, heatExtent, autoDomain, chartFrame, placeText, placeLabels, textBox, TEXT_CHAR_W,
+    graph, tree, matrices, sequences, grid, gridExtent, cellAt, shape, shapeGeom, edgePoint, labelRoom, cut, fitText, fitNum, link, linkGeom,
+    W, H, MARGIN, STRUCT, AXISLESS, heatExtent, autoDomain, chartFrame, zoomRange, dataExtent, equalAspect, placeText, placeLabels, textBox, TEXT_CHAR_W,
+    markBox, axisNames, manualGraph, graphNameBelow, graphNameHalf, GRAPH_MIN_R, seriesLegend,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = structures;
   else root.structures = structures;

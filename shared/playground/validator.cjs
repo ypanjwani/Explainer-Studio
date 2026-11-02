@@ -184,6 +184,30 @@
       return out;
     }
 
+    // Charts whose data runs further along x with every button press or Play tick (a loss per step, a return per
+    // episode). The dry run presses a button twice and plays 60 ticks, but a reader keeps going, so a wide x range on
+    // such a chart is room to grow, not empty space (Nov 1: narrowing it cut off every point after the 4th).
+    const growing = new Set();
+    function xEnds(S) {
+      const out = {};
+      for (const v of views) {
+        if (v.type !== 'chart') continue;
+        try { const e = dataXExtent(fns[v.id].draw(sandbox.view(S))); if (e) out[v.id] = e; } catch (e) { /* reported by runViews */ }
+      }
+      return out;
+    }
+    // states: in the order a button or Play reached them. A chart grows when its far end moves right at every step
+    // while its start stays put.
+    function noteGrowth(states) {
+      const ends = states.map(xEnds);
+      for (const id of Object.keys(ends[ends.length - 1])) {
+        const seen = ends.map((e) => e[id]).filter(Boolean);
+        if (seen.length < 2) continue;
+        const tol = 1e-9 * Math.max(1, Math.abs(seen[0][1]));
+        if (seen.every((e, i) => i === 0 || (e[1] > seen[i - 1][1] + tol && Math.abs(e[0] - seen[i - 1][0]) <= tol))) growing.add(id);
+      }
+    }
+
     // Apply a patch to S. Returns { S, changed:Set } or null on error.
     function applyPatch(S, patch, where) {
       if (patch === null || patch === undefined) return { S, changed: new Set() };
@@ -302,6 +326,7 @@
           return S;
         case 'button': {
           let cur = S;
+          const reached = [S];
           for (let i = 0; i < 2; i++) {
             const where = `${c.id}.onClick (click ${i + 1}) ${label}`;
             const r = call(c, 'onClick', cur, [undefined], where);
@@ -311,13 +336,16 @@
             const vb = i === 0 ? viewsBefore : runViews(cur, label);
             if (!vb || !recordEffect(c, vb, a.S, a.changed, `after ${where}`)) return null;
             cur = a.S;
+            reached.push(cur);
           }
+          noteGrowth(reached);
           return cur;
         }
         case 'play': {
           let cur = S;
           const startViews = viewsBefore;
           const allChanged = new Set();
+          const reached = [S];
           for (let step = 0; step < TICKS; step++) {
             const where = `${c.id}.onTick(step ${step}) ${label}`;
             const r = call(c, 'onTick', cur, [step], where);
@@ -327,8 +355,12 @@
             if (!a) return null;
             a.changed.forEach((k) => allChanged.add(k));
             cur = a.S;
-            if (step % 10 === 9 && !runViews(cur, `after ${where}`)) return null;
+            if (step % 10 === 9) {
+              if (!runViews(cur, `after ${where}`)) return null;
+              if (step < 30) reached.push(cur);  // ticks 10, 20, 30
+            }
           }
+          if (reached.length > 1) noteGrowth(reached[reached.length - 1] === cur ? reached : [...reached, cur]);
           if (!recordEffect(c, startViews, cur, allChanged, `after playing ${c.id} ${label}`)) return null;
           return cur;
         }
@@ -441,7 +473,7 @@
     if (!anyViewChanged) err('no chart or readout ever changes when the controls are used');
     if (!errors.length) {
       facts = factsOf(comps, S0, lastMarks, stats);
-      layout = layoutProblems(views, stateMarks, { x: xReach, y: yReach });
+      layout = layoutProblems(views, stateMarks, { x: xReach, y: yReach }, growing);
     }
     return done();
   }
@@ -491,14 +523,14 @@
   // the same problem in another state: equal once numbers outside 'quoted names' are taken out
   const problemKey = (m) => m.split("'").map((p, i) => (i % 2 ? p : p.replace(/-?\d[\d.]*(?:e[-+]?\d+)?/g, '#'))).join("'");
 
-  function layoutProblems(views, stateMarks, reach) {
+  function layoutProblems(views, stateMarks, reach, growing = new Set()) {
     const out = [];
     for (const c of views) {
       if (c.type !== 'chart') continue;
       const states = stateMarks[c.id] && stateMarks[c.id].length ? stateMarks[c.id] : [[]];
       const keys = new Set(), mine = [];
       states.forEach((marks, i) => {
-        for (const m of chartLayout(c, marks, i === 0 ? { x: reach.x[c.id], y: reach.y[c.id] } : null, i > 0)) {
+        for (const m of chartLayout(c, marks, i === 0 ? { x: reach.x[c.id], y: reach.y[c.id] } : null, i > 0, growing.has(c.id))) {
           const k = problemKey(m);
           if (mine.length >= 4 || (i > 0 && keys.has(k))) continue;  // at most 4 messages per chart
           keys.add(k);
@@ -513,7 +545,9 @@
   // One chart's layout problems in one state (marks). reached: the data's {x, y} extent over all states, for the
   // empty-range checks (passed once, with the first state). later: not the first state; a line pushed off the range
   // there is a slider at its extreme (a fitted line at the steepest slope), which widening y would only squash.
-  function chartLayout(c, marks, reached, later) {
+  // grows: the chart's data runs further along x with each button press or Play tick (validate's noteGrowth), so its
+  // x range is room to grow and never reported as empty.
+  function chartLayout(c, marks, reached, later, grows = false) {
     const out = [];
     const add = (m) => { if (!out.includes(m)) out.push(m); };
     {
@@ -606,10 +640,70 @@
           }
         }
       }
+      // ---- 2+ lines or areas in different colours with no words saying which is which (start only: a repair adds
+      // labels once). Nov 1: 10 of 206 playgrounds. More than 6 lines are a family of curves, not named series.
+      // Nov 2: also 2+ bar or dot series in different colours with no words; a chart whose series names are drawn as a
+      // legend (structures.seriesLegend, from opts.label) is named. Not one set of dots coloured per point: on the
+      // hand-written examples that flagged 4 of 14 (k-means clusters have no names to give), too noisy for a repair call.
+      if (!later && room()) {
+        const colourOf = (m) => JSON.stringify(m.color === undefined ? (typeof m.colors === 'string' ? m.colors : null) : m.color);
+        const lines = marks.filter((m) => (m.type === 'line' || m.type === 'area') && Array.isArray(m.points) && m.points.length >= 2);
+        const named = marks.some((m) => m.type === 'text' && String(m.text || '').trim()) || !!structures.seriesLegend(marks, f);
+        const kinds = { bars: 'bar series', points: 'sets of dots' };
+        if (!named && lines.length >= 2 && lines.length <= 6 && new Set(lines.map(colourOf)).size >= 2) {
+          add(`${c.id}: ${lines.length} lines in different colours but nothing says which is which; add a short text mark (1-3 words, the section's name for it) next to each line`);
+        } else if (!named) {
+          for (const type of ['bars', 'points']) {
+            const ser = marks.filter((m) => m.type === type && Array.isArray(type === 'bars' ? m.items : m.points) && (type === 'bars' ? m.items : m.points).length && !Array.isArray(m.colors) && !(type === 'bars' && Array.isArray(m.labels)));  // bars named under the axis are named
+            if (ser.length >= 2 && ser.length <= 6 && new Set(ser.map(colourOf)).size >= 2) {
+              add(`${c.id}: ${ser.length} ${kinds[type]} in different colours but nothing says which is which; give each one label: '<name>' (1-3 words, drawn as a legend)`);
+              break;
+            }
+          }
+        }
+      }
+      // ---- hand-placed graph nodes (layout 'manual') too close for their circles and names. The renderer shrinks the
+      // nodes first (structures.manualGraph); only what still collides at the smallest size is reported, plus text
+      // marks drawn on a node. Added Nov 2 from the rubric eval (row 18: a beam-search tree, nodes and names piled up).
+      const placed = structures.placeLabels(marks, f);
+      for (const m of marks) {
+        if (m.type !== 'graph' || m.layout !== 'manual' || !Array.isArray(m.nodes) || !room()) continue;
+        const g = structures.manualGraph(m, f.sx, f.sy, structures.markBox(m, plot));
+        const name = (i) => `'${clip(String(m.nodes[i].label === undefined ? `node ${i}` : m.nodes[i].label), 20)}'`;
+        const more = g.clash.length > 2 ? ` (${g.clash.length} pairs like this)` : '';
+        g.clash.slice(0, 2).forEach((k, idx) => {
+          if (!room()) return;
+          const tail = idx === 0 ? more : '';
+          const [a, b] = [g.pos[k.i], g.pos[k.j]];
+          if (k.kind === 'nodes') {
+            const horiz = Math.abs(b[0] - a[0]) >= Math.abs(b[1] - a[1]), unit = horiz ? ux : uy;
+            add(`${c.id}: graph nodes ${name(k.i)} and ${name(k.j)} are only ${Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]))} px apart, so their circles overlap even at the smallest size${tail}; put them at least ${r2(k.need / unit)} ${horiz ? 'x' : 'y'} units apart (1 ${horiz ? 'x' : 'y'} unit = ${r1(unit)} px here), or use fewer nodes`);
+          } else if (k.kind === 'name') {
+            add(`${c.id}: the name under graph node ${name(k.i)} lands on node ${name(k.j)} below it (${Math.round(Math.abs(b[1] - a[1]))} px apart, needs ${Math.round(k.need)})${tail}; names longer than 3 characters are drawn under the node, so put the rows at least ${r2(k.need / uy)} y units apart (1 y unit = ${r1(uy)} px here), use fewer rows of nodes, or names of 3 characters or less`);
+          } else {
+            add(`${c.id}: the names under graph nodes ${name(k.i)} and ${name(k.j)} run into each other${tail}; put the nodes at least ${r2(k.need / ux)} x units apart (1 x unit = ${r1(ux)} px here), or shorten the names`);
+          }
+        });
+        // a text mark (e.g. a score next to each node) drawn on a node's circle or on the name under it
+        const hits = (tb, x0, x1, y0, y1) => Math.min(tb.x1, x1) - Math.max(tb.x0, x0) > 2 && Math.min(tb.y1, y1) - Math.max(tb.y0, y0) > 2;
+        for (const t of marks) {
+          if (t.type !== 'text' || !String(t.text || '').trim() || !room()) continue;
+          const tb = structures.textBox(placed.get(t) || structures.placeText(t, f));
+          let what = '';
+          g.pos.some(([x, y], i) => {
+            if (hits(tb, x - g.r, x + g.r, y - g.r, y + g.r)) what = `graph node ${name(i)}`;
+            else if (structures.graphNameBelow(m.nodes[i]) && hits(tb, x - structures.graphNameHalf(m.nodes[i]), x + structures.graphNameHalf(m.nodes[i]), y + g.r + 3, y + g.r + 16)) what = `the name of graph node ${name(i)}`;
+            return !!what;
+          });
+          if (what) {
+            add(`${c.id}: the text '${clip(String(t.text), 40)}' is drawn on ${what}, so they cover each other; leave room beside the node for it, or give each node a value and set showValues: true (drawn just above the node)`);
+            break;
+          }
+        }
+      }
       // ---- text marks past the plot (drawn on top, unclipped, raised 0.4em). Measured where the renderer draws them:
       // structures.placeLabels moves a label that would cross an edge inside and nudges one off a line, so only a label
       // wider than the plot, or one with no free spot near it, is left.
-      const placed = structures.placeLabels(marks, f);
       for (const m of marks) {
         if (m.type !== 'text' || !room()) continue;
         const s = String(m.text || ''), t = placed.get(m) || structures.placeText(m, f), w = t.w, x = t.x, y = t.y - 5.6;
@@ -632,18 +726,7 @@
           }
         }
       }
-      // ---- the y-axis name is drawn inside the plot, at its top-left corner: on a heatmap it sits on a cell. (A curve
-      // touching it is left to the screenshot check: it is common and minor, and each flag costs a repair call.)
-      if (c.yLabel && f.hasAxes && room()) {
-        const lb = { x0: f.M.l + 2, x1: f.M.l + 6 + String(c.yLabel).length * 7.5, y0: f.M.t - 2, y1: f.M.t + 14 };
-        const onCells = marks.some((m) => {
-          if (m.type !== 'heatmap') return false;
-          const [hx0, hx1] = structures.heatExtent(m, 'x').map(f.sx), [hy0, hy1] = structures.heatExtent(m, 'y').map(f.sy);
-          return Math.min(lb.x1, Math.max(hx0, hx1)) > Math.max(lb.x0, Math.min(hx0, hx1)) && Math.min(lb.y1, Math.max(hy0, hy1)) > Math.max(lb.y0, Math.min(hy0, hy1));
-        });
-        if (onCells) add(`${c.id}: the y-axis name '${c.yLabel}' is drawn over the heatmap's top-left cells; use yLabels to name the rows and leave yLabel out`);
-      }
-      if (c.x && reached && reached.x && room() && !marks.some((m) => NO_SPACE_CHECK.has(m.type))) {
+      if (c.x && reached && reached.x && !grows && room() && !marks.some((m) => NO_SPACE_CHECK.has(m.type))) {
         const span = c.x[1] - c.x[0];
         const lo = Math.max(c.x[0], reached.x[0]), hi = Math.min(c.x[1], reached.x[1]);
         const cover = hi > lo ? (hi - lo) / span : 0;

@@ -358,7 +358,8 @@ def with_charts(*charts: dict) -> dict:
     return spec
 
 
-HEAT = chart("hm", "return [heatmap([[state.t, 1], [2, 3]], { x: [0, 2], y: [0, 2] })];", title="Weights", x=[0, 2], y=[0, 2], yLabel="query")
+# the data fills only [0, 50] of x [0, 200]: code narrows x (nothing on it needs the rest)
+WIDE = chart("wide", "return [line(range(11).map((i) => [i * 5, state.t * 0.8 + i * 0.1]))];", title="Weights", x=[0, 200], y=[0, 10])
 CAP10 = chart("cap", "return [line(range(11).map((i) => [i, Math.min(10, state.t * i)]))];", x=[0, 10], y=[0, 10])
 # the data fills only [0, 50] of x [0, 200], but the draggable point starts at x = 75: narrowing x would cut it off
 FAR = chart("far", "return [line(range(11).map((i) => [i * 5, state.t])), point(state.t * 15, 5, { id: 'p', draggable: true })];",
@@ -370,14 +371,6 @@ LATER = " (after the controls move, not at the start)"  # the validator's mark o
 
 def by_id(spec: dict, cid: str) -> dict:
     return next(c for c in spec["components"] if c.get("id") == cid)
-
-
-def test_layout_autofix_moves_a_heatmap_axis_name_into_the_title():
-    msg = "hm: the y-axis name 'query' is drawn over the heatmap's top-left cells; use yLabels to name the rows and leave yLabel out"
-    fixed = codelab._pg_layout_autofix(with_charts(HEAT), [msg])
-    assert "yLabel" not in by_id(fixed, "hm") and by_id(fixed, "hm")["title"] == "Weights (rows: query)"
-    untitled = with_charts({k: v for k, v in HEAT.items() if k != "title"})
-    assert by_id(codelab._pg_layout_autofix(untitled, [msg + LATER]), "hm")["title"] == "Rows: query"
 
 
 def test_layout_autofix_narrows_an_empty_x_range_but_not_below_its_old_start():
@@ -436,23 +429,23 @@ def test_layout_autofix_ignores_what_it_cant_fix():
 
 @needs_node
 def test_a_layout_code_fix_needs_no_haiku_call(monkeypatch):
-    assert any("drawn over the heatmap" in m for m in codelab.check_playground(with_charts(HEAT))["layout"])
-    result, _, _, sent, _ = run(monkeypatch, [with_charts(HEAT)])
+    assert any("wide: the data never fills" in m for m in codelab.check_playground(with_charts(WIDE))["layout"])
+    result, _, _, sent, _ = run(monkeypatch, [with_charts(WIDE)])
     assert [s["step"] for s in sent] == ["playground write"]
     (w,) = widgets(result)
-    assert "Weights (rows: query)" in w["html"] and "yLabel" not in w["html"]
+    assert '"x": [0, 200]' not in w["html"] and '"x":[0,200]' not in w["html"]
 
 
 @needs_node
 def test_haiku_gets_the_code_fixed_spec_for_what_is_left(monkeypatch):
-    both = with_charts(HEAT, CAP10)
+    both = with_charts(WIDE, CAP10)
     result, _, _, sent, _ = run(monkeypatch, [both, both])  # Haiku's layout reply is no better: the code fix stays
     assert [s["step"] for s in sent] == ["playground write", "playground layout"]
     asked = sent[1]["user"]
-    assert "yLabel" not in by_id(asked["yourPreviousSpec"], "hm")
+    assert by_id(asked["yourPreviousSpec"], "wide")["x"] != [0, 200]
     assert any("cap: a line mark sits on the top edge" in p for p in asked["problems"][1:])
     (w,) = widgets(result)
-    assert "Weights (rows: query)" in w["html"]
+    assert '"x": [0, 200]' not in w["html"] and '"x":[0,200]' not in w["html"]
 
 
 @needs_node
