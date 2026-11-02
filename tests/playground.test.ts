@@ -650,3 +650,49 @@ describe("playground: zero bars, cell names, equal scales, byte units", () => {
     expect(ro("return 20480 * state.a;", "Tokens")).toEqual(["20,480", "Tokens"]);
   });
 });
+
+// plan.covers (Nov 2): the builder lists what the section asks for and which components deliver it; the validator
+// reports items listed but not built, as soft "coverage" messages (never a failure).
+describe("playground coverage list (plan.covers)", () => {
+  const gini = () => JSON.parse(JSON.stringify(specs.find(([n]) => n === "gini-impurity.json")![1]));
+  const withCovers = (covers: unknown) => { const s = gini(); s.plan = { ...(s.plan || {}), covers }; return s; };
+
+  it("asks for the list when it is missing, without failing", () => {
+    const r = validate(gini());
+    expect(r.ok).toBe(true);
+    expect(r.coverage).toHaveLength(1);
+    expect(r.coverage[0]).toMatch(/^plan\.covers is missing/);
+  });
+
+  it("is quiet when every item is delivered by a component of the right kind", () => {
+    const r = validate(withCovers([
+      { need: "split threshold", kind: "control", by: ["t"] },
+      { need: "weighted Gini", kind: "number", by: ["wg"] },
+      { need: "impurity per side", kind: "view", by: ["bars"] },
+      { need: "class to place", kind: "control", by: ["cls", "data"] },
+    ]));
+    expect(r.coverage).toEqual([]);
+    expect(r.facts.covers.map((c: { need: string }) => c.need)).toContain("weighted Gini");
+  });
+
+  it("names items with unknown ids, no ids or the wrong kind of component", () => {
+    const r = validate(withCovers([
+      { need: "test mode", kind: "control", by: ["mode"] },
+      { need: "n_left and n_right", kind: "number" },
+      { need: "split threshold", kind: "control", by: ["wg"] },
+      { need: "best split", kind: "mark", by: ["t"] },
+    ]));
+    const all = r.coverage.join("\n");
+    expect(r.ok).toBe(true);
+    expect(all).toMatch(/"test mode" lists mode, but there is no component with that id/);
+    expect(all).toMatch(/"n_left and n_right" names no component/);
+    expect(all).toMatch(/"split threshold" is a control, but wg is a readout/);
+    expect(all).toMatch(/"best split" is a mark, but t is a slider: it needs a chart/);
+  });
+
+  it("asks the builder for the list in the prompt", () => {
+    expect(PLAYGROUND_SYSTEM).toMatch(/7\. covers:/);
+    expect(PLAYGROUND_SYSTEM).toMatch(/"covers": \[/);
+    expect(PLAYGROUND_SYSTEM).not.toMatch(/a focused set of controls/);
+  });
+});

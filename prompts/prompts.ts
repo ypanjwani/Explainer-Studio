@@ -993,16 +993,18 @@ Fill "plan" before anything else and think it through; the rest of the spec foll
 4. reacts: which views show the mechanism and which show the result, and what a user should notice when they play.
 5. views: which family each view is from (plotted chart, diagram or AI view) and why it fits better than the others.
 6. Check the plan against the concept's real definition: every essential ingredient of the concept must actually be computed, not skipped or faked.
-Then build a focused set of controls and views that serves the plan; add a view only if it shows something the others don't.
+7. covers: go through the section block by block and list everything in it a reader could change, read or compare in a playground, each as one item with the component ids that deliver it. Look for: settings, modes and switches it names (e.g. a training vs inference switch, a choice between methods, a new input to try); every intermediate number its formulas or worked example compute (each gets a readout or a number drawn on a chart, not only a bar); its worked example (use its numbers as the starting setting); a comparison it makes (both sides shown); the extreme cases it mentions (slider ranges reach them); a result it tracks over steps or over a setting (a chart of it); key points it names (marked on a chart). Leave out what belongs to other sections.
+Then build the controls and views that deliver every item in covers, and nothing the section doesn't ask for.
 
 ## Spec format
 {
   "title": "<short name for the playground, 1-5 words, in the section's terms>",
   "afterBlock": <optional: index of the section block the playground goes right after; default: before the section's closing questions>,
-  "plan": { "insight": "...", "mechanism": "...", "user_changes": "...", "reacts": "...", "views": "..." },
+  "plan": { "insight": "...", "mechanism": "...", "user_changes": "...", "reacts": "...", "views": "...",
+            "covers": [ { "need": "<the item, in the section's words>", "kind": "control" | "number" | "view" | "mark", "by": ["<component id>", ...] } ] },
   "state": { <all shared values: numbers, strings, booleans, arrays> },
   "init": "<optional snippet run once at start and on reset; returns a patch, e.g. to generate random data>",
-  "components": [ <2-12 components> ]
+  "components": [ <2-16 components> ]
 }
 Syntax skeleton (placeholders only; it shows the JSON shape, not a design to copy):
 {"title": "...", "plan": {...}, "state": {"a": 1, "pts": []}, "init": "return { pts: range(20).map(() => [randn(0, 1), randn(0, 1)]) };",
@@ -1072,7 +1074,7 @@ graph, tree, matrix, sequence and grid take plain data; the library does the lay
 - Numbers must be honest: when a readout measures how well a model does and generalization matters, compute it on data the model was not fit on (keep a separate test set in state).
 - No NaN/Infinity: guard divisions, empty arrays, log(0), and stop play loops (return null) when converged or diverging.
 - Choose freely from all components, marks and view families whatever shows the insight best. If a mark exists for what you want to draw, use it instead of assembling it from many text/rect/line marks.
-- Every slider, select, toggle and draggable point sets a quantity the section itself names, describes or uses in its formulas or worked example; never invent a setting the section doesn't discuss. Prefer direct manipulation (drag points, click to add) plus 1-3 such sliders/selects. Add a Step or Play only when the section describes a process over steps.
+- Every slider, select, toggle and draggable point sets a quantity the section itself names, describes or uses in its formulas or worked example; never invent a setting the section doesn't discuss. Prefer direct manipulation (drag points, click to add) plus the sliders/selects/toggles your covers list needs (usually 1-5). Add a Step or Play only when the section describes a process over steps.
 - Keep state small. Make results deterministic except through rand()/randn().
 - Pick each chart's x/y ranges so the initial state is fully visible and draggable handles start inside them.
 - Snippets are JSON strings: use single quotes for JS strings inside them, never a raw double quote; write line breaks as \\n.
@@ -1081,7 +1083,7 @@ graph, tree, matrix, sequence and grid take plain data; the library does the lay
 
 /** Playground mode: sent with a rejected playground, so Haiku fixes it instead of starting over. */
 export const PLAYGROUND_REPAIR = `# This time: fix your playground
-Your playground for this section was checked and rejected. "yourPreviousSpec" is the spec you wrote; "problems" are the exact failures found (from the checker that dry-runs every snippet and control, or from a reviewer who read the section and what the playground shows). Fix every problem and return the whole corrected JSON object only. Keep following the section; keep what worked; change only what is needed. When a reviewer says a control changes something the section doesn't discuss, replace that control with one for a quantity the section does discuss: renaming it is not enough.`;
+Your playground for this section was checked and rejected. "yourPreviousSpec" is the spec you wrote; "problems" are the exact failures found (from the checker that dry-runs every snippet and control, or from a reviewer who read the section and what the playground shows). Fix every problem and return the whole corrected JSON object only. Keep following the section; keep what worked; change only what is needed. When a reviewer says a control changes something the section doesn't discuss, replace that control with one for a quantity the section does discuss: renaming it is not enough. When a problem says an item of plan.covers is not delivered, add or fix the component that delivers it (or correct the item's ids), keeping everything else.`;
 
 /** Playground follow-ups (server/explainer/codelab_edit.py): sent with a finished playground the reader asked to change. */
 export const PLAYGROUND_EDIT = `# This time: change a finished playground

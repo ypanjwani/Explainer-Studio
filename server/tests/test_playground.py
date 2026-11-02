@@ -346,6 +346,61 @@ def test_a_layout_repair_that_breaks_a_check_keeps_the_original(monkeypatch):
     assert "node('rr', 5.6, 3" in w["html"]
 
 
+# ---------- plan.covers: items listed but not built share the one soft repair (Nov 2) ----------
+
+def covers(spec: dict, items: list) -> dict:
+    out = copy.deepcopy(spec)
+    out["plan"] = {**(out.get("plan") or {}), "covers": items}
+    return out
+
+
+GOOD_COVERS = [{"need": "split threshold", "kind": "control", "by": ["t"]}, {"need": "weighted Gini", "kind": "number", "by": ["wg"]}]
+BAD_COVERS = [{"need": "split threshold", "kind": "control", "by": ["t"]}, {"need": "test mode", "kind": "control", "by": ["mode"]}]
+
+
+@needs_node
+def test_the_checker_reports_coverage_without_failing():
+    report = codelab.check_playground(covers(GINI, BAD_COVERS))
+    assert report["problems"] == [] and report["facts"]["covers"]
+    assert any('"test mode" lists mode' in m for m in report["coverage"])
+    assert codelab.check_playground(covers(GINI, GOOD_COVERS))["coverage"] == []
+
+
+@needs_node
+def test_a_missing_covers_list_alone_costs_no_repair(monkeypatch):
+    result, _, _, sent, _ = run(monkeypatch, [GINI])
+    assert [s["step"] for s in sent] == ["playground write"]
+    assert len(widgets(result)) == 1
+
+
+@needs_node
+def test_an_undelivered_covers_item_gets_one_soft_repair_and_a_better_one_is_kept(monkeypatch):
+    result, _, _, sent, _ = run(monkeypatch, [covers(GINI, BAD_COVERS), covers(GINI, GOOD_COVERS)])
+    assert [s["step"] for s in sent] == ["playground write", "playground layout"]
+    problems = sent[1]["user"]["problems"]
+    assert problems[0] == codelab.SOFT_LEAD and any('"test mode"' in p for p in problems[1:])
+    (w,) = widgets(result)
+    assert "weighted Gini" in w["plan"]  # the repaired spec's covers list is kept on the block
+
+
+@needs_node
+def test_a_soft_repair_that_is_no_better_keeps_the_original(monkeypatch):
+    result, _, _, sent, _ = run(monkeypatch, [covers(GINI, BAD_COVERS), covers(GINI, BAD_COVERS)])
+    assert [s["step"] for s in sent] == ["playground write", "playground layout"]
+    (w,) = widgets(result)
+    assert "test mode" in w["plan"]
+
+
+@needs_node
+def test_coverage_and_layout_go_in_one_repair(monkeypatch):
+    both = covers(OVERLAP, [{"need": "a number", "kind": "number", "by": ["nope"]}])
+    _, _, _, sent, _ = run(monkeypatch, [both, SPREAD])
+    assert [s["step"] for s in sent] == ["playground write", "playground layout"]
+    problems = sent[1]["user"]["problems"]
+    assert problems[0] == codelab.SOFT_LEAD
+    assert any('"a number"' in p for p in problems) and any("overlap" in p for p in problems)
+
+
 # ---------- layout problems fixed by code before Haiku (_pg_layout_autofix) ----------
 
 def chart(cid: str, draw: str, **kw) -> dict:

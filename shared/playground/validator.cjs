@@ -25,7 +25,8 @@
     const err = (m) => { if (errors.length < 12 && !errors.includes(m)) errors.push(m); };
     let facts = null;
     let layout = [];  // soft layout problems (layoutProblems): reported for one repair, never a failure
-    const done = () => (errors.length === 0 ? { ok: true, errors, facts, layout } : { ok: false, errors });
+    let coverage = [];  // soft: plan.covers items no component delivers (coverageProblems; Explainer Studio, Nov 2)
+    const done = () => (errors.length === 0 ? { ok: true, errors, facts, layout, coverage } : { ok: false, errors });
     const t0 = Date.now();
 
     // ------------------------------------------------------------ shape
@@ -474,6 +475,9 @@
     if (!errors.length) {
       facts = factsOf(comps, S0, lastMarks, stats);
       layout = layoutProblems(views, stateMarks, { x: xReach, y: yReach }, growing);
+      coverage = coverageProblems(spec, comps);
+      const cov = coversOf(spec);
+      if (cov.length) facts.covers = cov.slice(0, 16).map((it) => ({ need: clip(it.need, 100), kind: it.kind, by: it.by.slice(0, 6) }));
     }
     return done();
   }
@@ -742,6 +746,45 @@
         if (hi > lo && cover < 0.4) {
           add(`${c.id}: the data never fills more than ${Math.round(cover * 100)}% of the y range ${JSON.stringify(c.y)} in any state, so most of the chart stays empty; narrow y to about [${r2(lo - 0.05 * (hi - lo))}, ${r2(hi + 0.08 * (hi - lo))}]`);
         }
+      }
+    }
+    return out;
+  }
+
+  // plan.covers (Explainer Studio, Nov 2): the builder lists what the section asks a playground to deliver and which
+  // components do it. Haiku writes the list, so this can't find what it left out; it catches items listed but not built
+  // (a missing or wrong id, a "control" delivered by a chart, a "number" with no readout or chart). Soft: one repair.
+  const COVER_KINDS = { control: 'a control (slider, select, toggle, button, play or a draggable/clickable chart)',
+    number: 'a readout or a chart', view: 'a chart or readout', mark: 'a chart' };
+  function coversOf(spec) {
+    const list = spec.plan && typeof spec.plan === 'object' && Array.isArray(spec.plan.covers) ? spec.plan.covers : [];
+    return list.filter((it) => it && typeof it === 'object').map((it) => ({
+      need: String(it.need == null ? '' : it.need).trim(), kind: String(it.kind || '').trim().toLowerCase(),
+      by: (Array.isArray(it.by) ? it.by : typeof it.by === 'string' ? [it.by] : []).map(String),
+    }));
+  }
+  function coverageProblems(spec, comps) {
+    const items = coversOf(spec);
+    if (!items.length) {
+      return ['plan.covers is missing: list each thing the section asks the reader to change, read or compare, with the ids of the components that deliver it'];
+    }
+    const byId = Object.fromEntries(comps.map((c) => [c.id, c]));
+    const isControl = (c) => ['slider', 'select', 'toggle', 'play'].includes(c.type) || (c.type === 'button' && c.action !== 'reset') ||
+      (c.type === 'chart' && (c.onDrag || c.onClick));
+    const fits = {
+      control: isControl, number: (c) => c.type === 'readout' || c.type === 'chart',
+      view: (c) => c.type === 'readout' || c.type === 'chart', mark: (c) => c.type === 'chart',
+    };
+    const out = [];
+    for (const it of items) {
+      if (out.length >= 10) break;
+      const name = JSON.stringify(clip(it.need || '(no need given)', 60));
+      const missing = it.by.filter((id) => !byId[id]);
+      const found = it.by.map((id) => byId[id]).filter(Boolean);
+      if (!it.by.length) out.push(`plan.covers item ${name} names no component: add the component that delivers it and list its id in "by"`);
+      else if (!found.length) out.push(`plan.covers item ${name} lists ${missing.join(', ')}, but there is no component with that id: add it, or point "by" at the component that delivers it`);
+      else if (fits[it.kind] && !found.some(fits[it.kind])) {
+        out.push(`plan.covers item ${name} is a ${it.kind}, but ${found.map((c) => `${c.id} is a ${c.type}`).join(', ')}: it needs ${COVER_KINDS[it.kind]}`);
       }
     }
     return out;
