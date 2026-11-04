@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 
 const python = resolve(process.platform === "win32" ? "server/.venv/Scripts/python.exe" : "server/.venv/bin/python");
 if (!existsSync(python)) {
-  console.error("No Python venv at server/.venv (see CLAUDE.md, \"Commands\").");
+  console.error("No Python venv at server/.venv (see .claude/CLAUDE.md, \"Run the local server\").");
   process.exit(1);
 }
 const r = spawnSync(python, ["-m", "pytest", "-q", ...process.argv.slice(2)], { stdio: "inherit", cwd: resolve("server") });

@@ -1,7 +1,7 @@
 // Runs the Flask API on :8787 for development (Vite proxies /api to it).
 // It reads explainer-studio/.env (ANTHROPIC_API_KEY=..., JEV_API_KEY=...) itself,
 // and Flask's debug reloader restarts it when a server file changes.
-// First time: create the venv (see CLAUDE.md, "Commands").
+// First time: create the venv (see .claude/CLAUDE.md, "Run the local server").
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
