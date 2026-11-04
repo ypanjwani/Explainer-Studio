@@ -467,6 +467,25 @@ def interactivity_hint(i: str | None) -> str:
     return ""
 
 
+def avoid_hint(avoid: dict | None) -> str:
+    """Retry: the replaced page's section titles, so the planner writes a fresh take instead of the same page again."""
+    if not avoid or not avoid.get("titles"):
+        return ""
+    titles = "; ".join(f'"{t}"' for t in avoid["titles"])
+    return ("This request was explained before, and the reader asked for a completely fresh explainer. The earlier one had these "
+            f"sections: {titles}. Take a different route: a different opening analogy, different examples, and a different order "
+            "or angle where the topic allows. Don't reuse those section titles. Keep every fact correct.")
+
+
+def other_theme(theme: str, avoid: dict | None) -> str:
+    """Retry: a theme other than the replaced page's, so the fresh page looks new too (the next one in menu order)."""
+    old = (avoid or {}).get("theme")
+    if not old or theme != old:
+        return theme
+    names = list(data.menu("THEMES"))
+    return names[(names.index(old) + 1) % len(names)] if old in names else theme
+
+
 def drops_examples(extras: list[str] | None) -> bool:
     """The reader answered "What do you want to add to each section?" without worked examples (None included).
     Absent (not asked: older apps, scripts) keeps the planner's usual examples, and so does auto."""
@@ -557,6 +576,7 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
     hint = "\n\n".join(x for x in [
         "" if lite else interactivity_hint(req.get("interactivity")),
         extras_hint(req.get("extras")),
+        avoid_hint(req.get("avoid")),
         f"The reader asked for {asked['count']} stages: write exactly {asked['count']}." if asked else "",
         # The reader's saved preferences (feedback.py); "" for most readers. Not for a feedback change, which does only
         # what the reader confirmed.
@@ -800,6 +820,9 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
         design = choose_design(client, outline, request, usage)
         if brief:
             design = design_with_brief(design or default_design(outline), brief)
+        if req.get("avoid"):
+            d = design or default_design(outline)
+            design = {**d, "theme": other_theme(d["theme"], req["avoid"])}
         jev_pick = " (Jev)" if brief and (brief.get("theme") or brief.get("fontPairing")) else ""
         _step(emit, "design", "done", f"{design['theme']} · {design['fontPairing']}{jev_pick}" if design else "default design")
 

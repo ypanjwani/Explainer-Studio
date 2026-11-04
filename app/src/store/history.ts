@@ -33,6 +33,11 @@ export interface ExplainerRecord {
   followUp?: { kind: "revise" | "new"; baseId: string; add?: true };
   /** Revisions: 2, 3… (the first explainer is version 1). */
   version?: number;
+  /**
+   * "↻ Retry": the id of the explainer this fresh one replaces. That one stays hidden while this builds; it is deleted
+   * once this is done (then the field is dropped), and comes back if this fails (shell/app.ts settleRetry).
+   */
+  replaces?: string;
   steps: Partial<Record<ProgressStep, { status: "running" | "done"; detail?: string }>>;
   error?: string;
   spec?: ExplainerSpec;

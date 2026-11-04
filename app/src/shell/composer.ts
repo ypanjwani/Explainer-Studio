@@ -186,15 +186,17 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     if (localStorage.getItem("quality") === "quality-deep") { localStorage.setItem("quality", "quality-plus"); localStorage.setItem("reviewRounds", "3"); }
   } catch { /* storage blocked */ }
   const mode = dropdown<Quality>({
-    // Lab and Code Lab 1.0-6.0 are off the menu (old explainers made with them still open and show their mode).
-    // A saved choice of one of them falls back to Interactive.
-    label: "Generation mode", key: "quality", fallback: "quality-plus", onChange: () => drawOptions(),
+    // Only Quick read and Playground are on the menu for now (Nov 2026): Interactive, Creative and Code Lab 7.0 are hidden
+    // while they're being worked on; their code stays, and old explainers made with them still open and show their mode.
+    // Lab and Code Lab 1.0-6.0 are off the menu too. A saved choice of any hidden mode falls back to Playground.
+    // To bring a mode back, add its line here again:
+    //   ["quality-plus", "Interactive", "Sliders, charts, quizzes and worked examples, with every section checked for clarity and facts."],
+    //   ["freeform-plus", "Creative", "Every interactive part is custom-built for the topic. More playful."],
+    //   ["code-lab-7", "Code Lab 7.0 (beta)", "A deep page with interactive parts written from scratch for each section (at most 4), designed freely like Creative's, then tested and reviewed. Costs more."],
+    label: "Generation mode", key: "quality", fallback: "playground", onChange: () => drawOptions(),
     options: [
-      ["quality-plus", "Interactive", "Sliders, charts, quizzes and worked examples, with every section checked for clarity and facts."],
       ["lite-plus", "Quick read", "A short page that is mostly reading, with charts at fixed values. The fastest."],
-      ["freeform-plus", "Creative", "Every interactive part is custom-built for the topic. More playful."],
       ["playground", "Playground (beta)", "A deep page where up to 4 sections get a hands-on playground: drag, click, play and watch it react. Tested and reviewed."],
-      ["code-lab-7", "Code Lab 7.0 (beta)", "A deep page with interactive parts written from scratch for each section (at most 4), designed freely like Creative's, then tested and reviewed. Costs more."],
     ],
   });
   const effort = segmented<GenEffort>({

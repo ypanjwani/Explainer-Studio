@@ -59,6 +59,10 @@ def parse_generate(body: Any) -> dict | str:
     # Code Lab test runs (scripts/variety.mjs): the widgets Jev's review rejected, in the done event. The app never sends it.
     if quality in ("code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground") and _get(body, "debugRejected") is True:
         opts["debugRejected"] = True
+    # Retry (the app's "↻ Retry"): what the explainer being replaced had, so the fresh one takes a different route.
+    avoid = _parse_avoid(_get(body, "avoid"))
+    if avoid:
+        opts["avoid"] = avoid
     # A follow-up in a conversation: revise the explainer above, or a related new one.
     f = parse_follow_up(_get(body, "followUp"))
     if isinstance(f, str):
@@ -97,8 +101,23 @@ def parse_generate(body: Any) -> dict | str:
     return "Unknown request."
 
 
+AVOID_TITLES = 12  # at most this many section titles of the replaced page
+AVOID_TITLE_CHARS = 120
+
+
+def _parse_avoid(v: Any) -> dict | None:
+    """{"titles": [...], "theme"?: name}, or None when there is nothing usable. Bad parts are dropped, not errors."""
+    if not isinstance(v, dict) or not isinstance(v.get("titles"), list):
+        return None
+    titles = [js_slice(js_trim(t), 0, AVOID_TITLE_CHARS) for t in v["titles"] if isinstance(t, str) and js_trim(t)][:AVOID_TITLES]
+    if not titles:
+        return None
+    theme = v.get("theme")
+    return {"titles": titles, **({"theme": theme} if isinstance(theme, str) and theme in data.menu("THEMES") else {})}
+
+
 def _order(opts: dict) -> dict:
-    return {k: opts[k] for k in ("effort", "interactivity", "level", "extras", "reviewRounds", "planThinking", "colorMode", "debugVersions", "debugRejected") if k in opts}
+    return {k: opts[k] for k in ("effort", "interactivity", "level", "extras", "reviewRounds", "planThinking", "colorMode", "avoid", "debugVersions", "debugRejected") if k in opts}
 
 
 def parse_chat(body: Any) -> dict | str:

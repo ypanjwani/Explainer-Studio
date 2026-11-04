@@ -362,6 +362,11 @@ a { color: inherit; }
 .add-input { width: 100%; box-sizing: border-box; border: 0; outline: none; background: transparent; resize: vertical; font: inherit; line-height: 1.5; color: inherit; }
 .add-input::placeholder { color: var(--muted); }
 .add-form .dock-note { margin: 4px 0 8px; text-align: left; }
+/* "↻ Retry" under the conversation's last explainer, with its confirm row */
+.retry-box { margin-top: 12px; width: 100%; max-width: 540px; }
+.retry-confirm { border: 1px solid var(--border-strong); border-radius: 14px; padding: 12px 14px; background: var(--surface); }
+.retry-confirm[hidden] { display: none; }
+.retry-confirm .dock-note { margin: 0 0 8px; text-align: left; }
 
 /* "What do you want to add to each section?" (extras.ts) */
 .msg-extras { display: flex; flex-direction: column; gap: 2px; width: 100%; max-width: 520px; padding: 8px; border-radius: 16px; border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow); }

@@ -141,6 +141,8 @@ export class App {
       r.error = "This explainer was waiting for a design choice that no longer exists. Try again.";
       putRecord(r);
     }
+    // A retry that finished while no tab watched it: delete what it replaced, or bring that back if it failed.
+    for (const r of this.records.filter((r) => r.replaces && r.status !== "generating")) await this.settleRetry(r);
     this.route();
     this.pollGenerating();
     this.offerLegacy();
@@ -179,6 +181,7 @@ export class App {
           this.records[i] = fresh;
           if (changed) this.refresh(fresh.id);
           if (fresh.status !== "generating") refreshAllowance().then(() => this.drawSidebar());
+          if (fresh.status !== "generating" && fresh.replaces) await this.settleRetry(fresh);
         }
       }
     } finally {
@@ -205,6 +208,8 @@ export class App {
     else if (kind === "c" && id) {
       const rec = this.records.find((r) => r.id === id) ?? (await getRecord(id));
       if (!rec) { location.hash = "#/"; return; }
+      const replacing = this.replacerOf(rec);
+      if (replacing) { location.hash = `#/c/${replacing.id}`; return; }
       if (x === "x" && rec.spec) this.showExplainer(rec, stage);
       else this.showConversation(rec);
     } else this.showHome();
@@ -231,7 +236,7 @@ export class App {
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     // One entry per conversation, ordered by its latest activity.
     const last = (root: string) => Math.max(...this.threadOf(root).map((r) => r.updatedAt));
-    const heads = this.records.filter((r) => this.rootOf(r) === r.id).sort((a, b) => last(b.id) - last(a.id));
+    const heads = this.records.filter((r) => this.rootOf(r) === r.id && !this.replacerOf(r)).sort((a, b) => last(b.id) - last(a.id));
     for (const r of heads) {
       const t = last(r.id);
       const g = t >= startOfDay ? "Today" : t >= startOfDay - 86_400_000 ? "Yesterday" : t >= startOfDay - 7 * 86_400_000 ? "Previous 7 days" : "Older";
@@ -430,10 +435,14 @@ export class App {
       body.push(h("p.msg-choice", null, rec.followUp.add
         ? `➕ Version ${rec.version ?? 2}: adding a section to ${what}`
         : rec.followUp.kind === "revise"
-        ? `✏️ Version ${rec.version ?? 2}: revising ${what}`
+        ? `✏️ Version ${rec.version ?? 2}: revising ${what} (${MODE_NAME[rec.request.quality ?? "quality-plus"] ?? "Interactive"})`
         : "✨ A new explainer that builds on this conversation"));
     }
-    if (rec.status === "generating") body.push(h("p.msg-text", null, isPaper ? "Reading your paper and designing an explainer. This usually takes 1–3 minutes." : rec.followUp?.add ? "Adding a section. Everything already on the page stays as it is." : rec.followUp?.kind === "revise" ? "Revising the explainer. This usually takes about a minute." : "Designing your explainer. This usually takes about a minute."), steps);
+    if (rec.replaces && rec.status === "generating") {
+      const old = this.records.find((r) => r.id === rec.replaces);
+      body.push(h("p.msg-choice", null, `↻ A fresh explainer, replacing “${old?.spec?.title ?? old?.title ?? "the old one"}”`));
+    }
+    if (rec.status === "generating") body.push(h("p.msg-text", null, rec.replaces ? "Building a fresh explainer on the same prompt. The old one is replaced once this is ready." : isPaper ? "Reading your paper and designing an explainer. This usually takes 1–3 minutes." : rec.followUp?.add ? "Adding a section. Everything already on the page stays as it is." : rec.followUp?.kind === "revise" ? "Revising the explainer. This usually takes about a minute." : "Designing your explainer. This usually takes about a minute."), steps);
     if (rec.status === "error") {
       body.push(steps, h("div.msg-error", { role: "alert" }, h("strong", null, "Something went wrong. "), rec.error ?? ""),
         h("button.btn-pill", { type: "button", onclick: () => this.retry(rec) }, "↻ Try again"));
@@ -459,6 +468,8 @@ export class App {
       if (s.warnings.length) body.push(h("details.msg-warn", null, h("summary", null, `${s.warnings.length} part(s) were fixed or skipped automatically`), h("ul", null, ...s.warnings.map((w) => h("li", null, plain(w))))));
       // "Add section": only under the conversation's latest explainer, and only for Quality pages.
       if (isQuality(rec.request.quality) && this.followUpBase(this.rootOf(rec)) === rec && !thread.some((r) => r.status !== "done" && r.status !== "error")) body.push(this.addSectionBox(rec));
+      // "↻ Retry": only on the conversation's last message, so no later version is built on a page that goes away.
+      if (thread.at(-1) === rec) body.push(this.retryBox(rec));
     }
 
     return [userMsg, h("div.msg.is-assistant", null, h("div.msg-avatar", { "aria-hidden": "true" }, "✦"), h("div.msg-body", null, ...body))];
@@ -662,7 +673,12 @@ export class App {
 
   /** A conversation's records, oldest first. */
   private threadOf(root: string): ExplainerRecord[] {
-    return this.records.filter((r) => this.rootOf(r) === root).sort((a, b) => a.createdAt - b.createdAt);
+    return this.records.filter((r) => this.rootOf(r) === root && !this.replacerOf(r)).sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /** The retry building a fresh explainer in place of `r` (r is then hidden until the retry ends). */
+  private replacerOf(r: ExplainerRecord): ExplainerRecord | undefined {
+    return this.records.find((x) => x.replaces === r.id);
   }
 
   /** The conversation's latest finished explainer (before `before`, if given): what a follow-up builds on. */
@@ -689,6 +705,18 @@ export class App {
       }
       // A revision keeps the answer the explainer above was made with; a new Quality explainer asks again.
       if (kind === "revise" && base.request.extras) rec.request = { ...rec.request, extras: base.request.extras };
+      // A revision is made in the page's own mode (with its review rounds and Thinking), not the one picked in the box now:
+      // a Playground page revised with Quick read selected would otherwise lose its playgrounds.
+      if (kind === "revise") {
+        const r: GenerateRequest = { ...rec.request };
+        const b = base.request;
+        delete r.reviewRounds;
+        delete r.planThinking;
+        r.quality = b.quality;
+        if (b.reviewRounds) r.reviewRounds = b.reviewRounds;
+        if (b.planThinking !== undefined) r.planThinking = b.planThinking;
+        rec.request = r;
+      }
     }
     if (isQuality(rec.request.quality) && rec.request.quality && !rec.request.extras && kind === "new") {
       rec.status = "asking";
@@ -808,6 +836,73 @@ export class App {
     this.run(rec);
   }
 
+  /** "↻ Retry" with a confirm row: the old explainer can't be recovered once the fresh one is ready. */
+  private retryBox(rec: ExplainerRecord): HTMLElement {
+    const go = h("button.btn-pill.is-primary", { type: "button" }, "Retry") as HTMLButtonElement;
+    const ask = h("div.retry-confirm", { hidden: true },
+      h("p.dock-note", null, "This builds a fresh explainer on the same prompt and replaces this one. The old one can't be recovered."),
+      h("div.msg-choices", null, go, h("button.btn-pill", { type: "button", onclick: () => { ask.hidden = true; open.hidden = false; } }, "Cancel")));
+    const open = h("button.btn-pill", { type: "button", title: "Build a fresh explainer on the same prompt (replaces this one)", onclick: () => { ask.hidden = false; open.hidden = true; go.focus(); } }, "↻ Retry") as HTMLButtonElement;
+    go.addEventListener("click", () => { go.disabled = true; this.retryFresh(rec); });
+    return h("div.retry-box", null, open, ask);
+  }
+
+  /**
+   * A fresh explainer from `old`'s request (same mode, options and prompt), told what `old` had so it takes another route.
+   * It is a new record; `old` stays hidden until it ends (settleRetry).
+   */
+  private async retryFresh(old: ExplainerRecord) {
+    if (!old.spec || this.replacerOf(old)) return;
+    const b = old.request;
+    const titles = [...old.spec.stages.map((st) => st.label), ...(b.avoid?.titles ?? [])].filter((t, i, a) => t && a.indexOf(t) === i).slice(0, 12);
+    const theme = old.spec.design.theme !== "custom" ? old.spec.design.theme : undefined;
+    const request: GenerateRequest = { ...b, avoid: { titles, ...(theme ? { theme } : {}) } };
+    // A version made from Feedback is redone as an ordinary revision of the same request (its confirmed run was used up).
+    if (request.followUp?.kind === "revise" && request.followUp.feedback) {
+      const { feedback: _used, ...f } = request.followUp;
+      request.followUp = f;
+    }
+    const now = Date.now();
+    const rec: ExplainerRecord = {
+      id: uid(), title: old.title, createdAt: now, updatedAt: now, prompt: { ...old.prompt }, request,
+      status: "generating", steps: {}, progress: { visited: [], answers: {} }, chat: [],
+      ...(old.thread ? { thread: old.thread } : {}), ...(old.followUp ? { followUp: old.followUp } : {}), ...(old.version ? { version: old.version } : {}),
+      replaces: old.id,
+    };
+    if (this.addBox?.recId === old.id) this.addBox = undefined;
+    this.records.unshift(rec);
+    await putRecord(rec);
+    location.hash = `#/c/${rec.id}`;
+    this.run(rec);
+  }
+
+  /** A retry ended: done deletes the explainer it replaced; failed deletes the retry, and the old explainer comes back. */
+  private async settleRetry(rec: ExplainerRecord) {
+    const oldId = rec.replaces;
+    if (!oldId || rec.status === "generating") return;
+    if (rec.status === "done") {
+      try {
+        await deleteRecord(oldId);
+      } catch (e) {
+        // Still hidden; the next load tries again.
+        toast(e instanceof Error ? `Couldn't remove the old explainer: ${e.message}` : "Couldn't remove the old explainer.");
+        return;
+      }
+      this.records = this.records.filter((r) => r.id !== oldId);
+      delete rec.replaces;
+      rec.updatedAt = Date.now();
+      putRecord(rec);
+      this.refresh(rec.id);
+      return;
+    }
+    const why = rec.error;
+    try { await deleteRecord(rec.id); } catch { /* a leftover is settled again on the next load */ }
+    this.records = this.records.filter((r) => r.id !== rec.id);
+    toast(`Retry failed${why ? `: ${why}` : ""}. Your explainer is unchanged.`);
+    if (this.currentId() === rec.id) location.hash = this.records.some((r) => r.id === oldId) ? `#/c/${oldId}` : "#/";
+    else this.drawSidebar();
+  }
+
   private retry(rec: ExplainerRecord) {
     rec.status = "generating";
     rec.error = undefined;
@@ -840,6 +935,8 @@ export class App {
         putRecord(rec, { remote: e.type !== "step" });
         this.refresh(rec.id);
       }, ctrl.signal, rec.id);
+      this.running.delete(rec.id);
+      if (rec.replaces) await this.settleRetry(rec);
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
       if (e instanceof ConnectionLost) {
@@ -852,6 +949,8 @@ export class App {
       rec.error = e instanceof Error ? e.message : String(e);
       putRecord(rec);
       this.refresh(rec.id);
+      this.running.delete(rec.id);
+      if (rec.replaces) await this.settleRetry(rec);
     } finally {
       this.running.delete(rec.id);
       refreshAllowance().then(() => this.drawSidebar());

@@ -712,8 +712,10 @@ export interface DesignPrefs { palette: ThemeName | "custom"; accent?: string; c
  * absent = none, except quality-deep, which then has 3). Interactive with rounds is sent as quality-deep.
  * planThinking: Code Lab 2.0, 3.0 and 4.0 only; false plans, repairs and backs up its charts with Haiku's thinking off (absent = on).
  * colorMode: the composer's Page colours; stamped as spec.design.mode, so the page opens and exports in it (absent = follow the reader).
+ * avoid: "↻ Retry" only: the replaced explainer's section titles and theme, so the fresh one takes another route and looks new
+ * (server/explainer/pipeline.py avoid_hint, other_theme; at most 12 titles of 120 characters).
  */
-interface RequestOptions { quality?: Quality; effort?: GenEffort; interactivity?: Interactivity; level?: LevelChoice; extras?: Extra[]; reviewRounds?: number; planThinking?: boolean; colorMode?: Exclude<ColorMode, "auto">; followUp?: FollowUp }
+interface RequestOptions { quality?: Quality; effort?: GenEffort; interactivity?: Interactivity; level?: LevelChoice; extras?: Extra[]; reviewRounds?: number; planThinking?: boolean; colorMode?: Exclude<ColorMode, "auto">; avoid?: { titles: string[]; theme?: ThemeName }; followUp?: FollowUp }
 
 /**
  * A follow-up typed under an explainer in the same conversation (shared/followup.ts builds it).
