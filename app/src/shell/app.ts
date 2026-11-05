@@ -35,6 +35,8 @@ import type { Extra } from "../../../shared/menus";
 const EDIT_CHAT = false;
 /** The Feedback button on an open explainer (feedback.ts, /api/feedback). Hidden in every mode for now; the code stays. */
 const FEEDBACK = false;
+/** "What do you want to add to each section?" (extras.ts). Hidden for v1: new explainers get no extras ("None"); the code stays. */
+const EXTRAS_QUESTION = false;
 
 const SUGGESTIONS = [
   { label: "Attention in transformers", text: "Explain self-attention in transformers: queries, keys, values and why it works." },
@@ -459,7 +461,7 @@ export class App {
     }
     if (rec.status === "asking") {
       body.push(h("p.msg-text", null, "What do you want to add to each section?"), extrasQuestion((ex) => this.answerExtras(rec, ex)));
-    } else if (isQuality(rec.request.quality) && rec.request.quality && rec.request.extras && rec.status !== "deciding" && rec.status !== "picking") {
+    } else if (EXTRAS_QUESTION && isQuality(rec.request.quality) && rec.request.quality && rec.request.extras && rec.status !== "deciding" && rec.status !== "picking") {
       body.push(h("p.msg-choice", null, extrasSummary(rec.request.extras)));
     }
     if (rec.followUp && rec.status !== "deciding") {
@@ -474,7 +476,7 @@ export class App {
       const old = this.records.find((r) => r.id === rec.replaces);
       body.push(h("p.msg-choice", null, `↻ A fresh explainer, replacing “${old?.spec?.title ?? old?.title ?? "the old one"}”`));
     }
-    if (rec.status === "generating") body.push(h("p.msg-text", null, rec.replaces ? "Building a fresh explainer on the same prompt. The old one is replaced once this is ready." : isPaper ? "Reading your paper and designing an explainer. This usually takes 1–3 minutes." : rec.followUp?.add ? "Adding a section. Everything already on the page stays as it is." : rec.followUp?.kind === "revise" ? "Revising the explainer. This usually takes about a minute." : "Designing your explainer. This usually takes about a minute."), steps);
+    if (rec.status === "generating") body.push(h("p.msg-text", null, rec.replaces ? "Building a fresh explainer on the same prompt. The old one is replaced once this is ready." : isPaper ? "Reading your paper and designing an explainer. This usually takes 1–3 minutes." : rec.followUp?.add ? "Adding a section. Everything already on the page stays as it is." : rec.followUp?.kind === "revise" ? "Revising the explainer. This usually takes about a minute." : `Designing your explainer. This usually takes ${HOW_LONG[rec.request.quality ?? ""] ?? "about a minute"}.`), steps);
     if (rec.status === "error") {
       body.push(steps, h("div.msg-error", { role: "alert" }, h("strong", null, "Something went wrong. "), rec.error ?? ""),
         h("button.btn-pill", { type: "button", onclick: () => this.retry(rec) }, "↻ Try again"));
@@ -662,13 +664,14 @@ export class App {
       request = { mode: "concept", text: s.text, ...optionsOf(s) };
       title = clip(s.text);
     }
+    if (!EXTRAS_QUESTION && isQuality(s.quality) && s.quality) request = { ...request, extras: [] };
     // A follow-up continues from the conversation's latest finished explainer.
     const base = root ? this.followUpBase(root) : undefined;
     const now = Date.now();
     const rec: ExplainerRecord = {
       id: uid(), title, createdAt: now, updatedAt: now,
       prompt: { text: s.text, fileName: s.paper?.fileName, pages: s.paper?.pages },
-      request, status: base ? "deciding" : isQuality(s.quality) && s.quality ? "asking" : "generating", steps: {}, progress: { visited: [], answers: {} }, chat: [],
+      request, status: base ? "deciding" : isQuality(s.quality) && s.quality && !request.extras ? "asking" : "generating", steps: {}, progress: { visited: [], answers: {} }, chat: [],
       ...(root ? { thread: root } : {}),
     };
     this.records.unshift(rec);
@@ -1031,7 +1034,8 @@ export class App {
     const { quality, reviewRounds: _r, effort: _e, interactivity: _i, level: _l, planThinking: _t, colorMode: _c, extras, ...rest } = edited;
     const opts = optionsOf(choices);
     const keep = !!extras && quality === opts.quality;
-    return { request: { ...rest, ...opts, ...(keep ? { extras } : {}) } as GenerateRequest, ask: isQuality(opts.quality) && !keep };
+    const none = !keep && !EXTRAS_QUESTION && isQuality(opts.quality); // question hidden (v1): no extras
+    return { request: { ...rest, ...opts, ...(keep ? { extras } : none ? { extras: [] } : {}) } as GenerateRequest, ask: isQuality(opts.quality) && !keep && !none };
   }
 
   /**
@@ -1231,6 +1235,9 @@ function copyNow(text: string): boolean {
   ta.remove();
   return ok;
 }
+
+/** How long a new explainer usually takes, by mode (dev runs, Nov 2026: Explorer median 97 s, 50-193 s; Reader median 27 s). */
+const HOW_LONG: Record<string, string> = { playground: "1–3 minutes", "playground-2": "1–3 minutes", "lite-plus": "under a minute" };
 
 /** A typed prompt as a conversation title. */
 function clip(text: string): string {

@@ -64,6 +64,8 @@ Other modes' code still exists and Playground reuses parts of it (the Code Lab m
 
 ## Options
 
+**The "What do you want to add to each section?" question is hidden for v1** (`EXTRAS_QUESTION = false` in `app/src/shell/app.ts`, Nov 5 2026): new prompts, new-topic follow-ups and edits send `extras: []` (None) and start at once; records already waiting on the question still show it. `extras.ts` stays.
+
 **v1 shows only Effort, Thinking and Page color** (`MORE_OPTIONS = false` in `app/src/shell/composer.ts`, Nov 5 2026). Level, How hands on and Review Rounds are hidden and send their defaults (Level Auto, Balanced, no rounds), not a remembered choice; their code stays.
 
 - **Level:** Auto / Beginner / Intermediate / Advanced (Auto is cheapest).

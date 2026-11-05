@@ -813,8 +813,12 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
         # Chart block on: numeric experiments the planner still wrote become charts (Jev picks the view).
         if not lite and not code_lab and not targeted and (chart_on() or scenes):
             outline = experiments_to_charts(outline, jev_key, usage, warnings)
+        plan_done = False
         if code_lab:  # Haiku's prose only; Haiku then writes the interactions (started while the text streamed, for a new page)
             outline = strip_prebuilt(outline)
+            if revision is None:  # the lesson text is finished: say so before the playgrounds, not after them
+                _step(emit, "plan", "done", f"{len(outline['stages'])} stages")
+                plan_done = True
             _step(emit, "interaction", "running")
             if streamed:
                 outline, cl = streamed.finish(outline, warnings, lambda d: _step(emit, "interaction", "running", d))
@@ -835,7 +839,7 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
             outline = restore_kept_widgets(outline, follow["widgets"])
         if revision is not None:
             _step(emit, "plan", "done", revision_summary(revision, outline, base_outline)["text"])
-        else:
+        elif not plan_done:
             _step(emit, "plan", "done", f"{len(outline['stages'])} stages")
 
     _step(emit, "design", "running")
