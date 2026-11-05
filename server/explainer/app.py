@@ -122,7 +122,7 @@ def create_app() -> Flask:
     @app.get("/")
     def index() -> Response:
         if not (DIST / "index.html").exists():
-            return Response("Explainer Studio API. Build the app (npm run build) to serve it from here.", mimetype="text/plain")
+            return Response("ClariTale API. Build the app (npm run build) to serve it from here.", mimetype="text/plain")
         return send_from_directory(DIST, "index.html")
 
     @app.get("/<path:path>")

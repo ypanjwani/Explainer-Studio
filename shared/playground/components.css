@@ -59,6 +59,8 @@ html { scrollbar-gutter: stable; }
 .pg-btn:hover { filter: brightness(1.08); }
 .pg-btn:active { transform: scale(.97); }
 .pg-btn-ghost { background: var(--accent-soft); color: var(--accent); }
+.pg-btn:disabled { opacity: .45; cursor: default; filter: none; transform: none; }
+.pg-hint { margin: 0; font-size: 13px; color: var(--muted, #5b6274); }
 .pg-play.is-running { background: var(--c-orange); }
 
 /* readouts */

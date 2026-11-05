@@ -98,6 +98,7 @@
       if (spec.action === 'reset') return ctx.reset();
       ctx.apply(ctx.run(slots.onClick, `${spec.id}.onClick`), `${spec.id}.onClick`);
     });
+    return b;
   }
 
   function play(box, spec, slots, ctx) {
@@ -394,6 +395,17 @@
           const absMax = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
           const pos = colorAttr(m.color === undefined ? 'blue' : m.color, 'fill');
           const neg = colorAttr(m.negColor === undefined ? 'red' : m.negColor, 'fill');
+          // Added Nov 4: cell values by default (Haiku rarely set showValues, so cells were colour only). Unset ->
+          // written when the grid is small (<= 100 cells), the cells are big enough, the chart has no text marks of
+          // its own (they would double up) and every value fits its cell in one style (barValues). true forces, false hides.
+          const cellW = Math.abs(sx(x0 + cw) - sx(x0)), cellH = Math.abs(sy(y0 + ch) - sy(y0));
+          let shown = null;  // per-cell value text, in the auto case
+          if (m.showValues === undefined && !dense && rows * cols <= 100 && !chartHasText && cellH >= 14) {
+            const chars = Math.floor((cellW - 4) / 6.6);
+            shown = chars >= 1 ? barValues(flat, chars) : null;
+          }
+          const show = m.showValues === true || !!shown;
+          const valText = (r, c) => (shown ? shown[r * cols + c] : fmt(v[r][c]));
           let out = '';
           for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
@@ -406,15 +418,15 @@
               // Added Nov 2 (rubric eval row 3): cellLabels names each cell (TP / FN / FP / TN), drawn above its value
               const nm = Array.isArray(m.cellLabels) && Array.isArray(m.cellLabels[r]) ? m.cellLabels[r][c] : null;
               const hasName = nm !== null && nm !== undefined && String(nm) !== '';
-              const cx = (ax + bx) / 2, cy = (ay + by) / 2, two = hasName && m.showValues && Math.abs(by - ay) >= 34;
+              const cx = (ax + bx) / 2, cy = (ay + by) / 2, two = hasName && show && Math.abs(by - ay) >= 34;
               const strong = t > 0.55 ? ' is-strong' : '';
               if (hasName) {
                 const room = Math.max(2, Math.floor((Math.abs(bx - ax) - 6) / 7));
-                const label = two || !m.showValues ? String(nm) : `${nm} ${fmt(val)}`;
+                const label = two || !show ? String(nm) : `${nm} ${valText(r, c)}`;
                 out += `<text class="mk-cellval mk-cellname${strong}" x="${n(cx)}" y="${n(two ? cy - 9 : cy)}" text-anchor="middle" dy="0.35em">${esc(root.structures.cut(label, room))}</text>`;
               }
-              if (m.showValues && (!hasName || two)) {
-                out += `<text class="mk-cellval${strong}" x="${n(cx)}" y="${n(two ? cy + 9 : cy)}" text-anchor="middle" dy="0.35em">${esc(fmt(val))}</text>`;
+              if (show && (!hasName || two)) {
+                out += `<text class="mk-cellval${strong}" x="${n(cx)}" y="${n(two ? cy + 9 : cy)}" text-anchor="middle" dy="0.35em">${esc(valText(r, c))}</text>`;
               }
             }
           }
@@ -466,6 +478,7 @@
     let edgeSeen = [];  // off-edge arrows and labels drawn this render (offEdge), shared by all marks
     let barLayout = new Map();
     let autoBarValues = false;  // set per render: few bars, no text marks
+    let chartHasText = false;   // set per render: the chart draws text marks of its own
     let dotsAt = [];            // set per render: every dot's centre and radius in px (an arrow ending on one stops at its edge)
     let equalScales = false;    // set per render: the range was widened for equal x and y scales
     let underLines = new Set(); // set per render: lines another line lies exactly on top of (drawn wide and faint beneath it)
@@ -546,8 +559,8 @@
       overlay = [];
       edgeSeen = [];
       layoutBars(marks);
-      autoBarValues = marks.filter((m) => m.type === 'bars').reduce((t, m) => t + (m.items || []).length, 0) <= 12 &&
-        !marks.some((m) => m.type === 'text' && String(m.text == null ? '' : m.text).trim());
+      chartHasText = marks.some((m) => m.type === 'text' && String(m.text == null ? '' : m.text).trim());
+      autoBarValues = marks.filter((m) => m.type === 'bars').reduce((t, m) => t + (m.items || []).length, 0) <= 12 && !chartHasText;
       const frame = chartFrame(spec, marks);  // the same frame the checker measures layout with
       dom = frame.dom;
       hasAxes = frame.hasAxes;

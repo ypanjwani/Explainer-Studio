@@ -46,7 +46,7 @@ const t0 = Date.now();
 const res = await fetch(`${API}/api/generate`, {
   method: "POST",
   headers: { "Content-Type": "application/json", Origin: "http://localhost:5173", Authorization: `Bearer ${token}` },
-  body: JSON.stringify({ mode: "concept", text, quality, effort, followUp, ...(quality.startsWith("code-lab") || quality === "playground" ? { debugRejected: true } : {}) }),
+  body: JSON.stringify({ mode: "concept", text, quality, effort, followUp, ...(quality.startsWith("code-lab") || quality.startsWith("playground") ? { debugRejected: true } : {}) }),
 });
 if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
 const events = (await res.text()).split("\n").filter((l) => l.startsWith("data: ")).map((l) => JSON.parse(l.slice(6)));

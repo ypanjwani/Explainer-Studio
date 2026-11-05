@@ -8,6 +8,9 @@ import type { ExtractedPaper } from "../pdf";
 import { h } from "../render/dom";
 import { isDark } from "./mode";
 
+/** Level, How hands-on and Review rounds in Options. Hidden for v1 (only Effort, Thinking, Page colours); the code stays. */
+const MORE_OPTIONS = false;
+
 export interface ComposerSubmit {
   text: string;
   paper?: ExtractedPaper & { fileName: string };
@@ -22,6 +25,11 @@ export interface ComposerSubmit {
   /** Page colours: the explainer opens and exports in this. */
   colorMode: "light" | "dark";
 }
+
+/** The composer's current choices (mode and options), without the prompt. */
+export type ComposerChoices = Omit<ComposerSubmit, "text" | "paper">;
+/** The composer element: `fill` puts text in the box, `choices` reads the current mode and options (✏️ Edit uses them). */
+export type ComposerEl = HTMLElement & { fill?: (t: string) => void; choices?: () => ComposerChoices };
 
 /** A browser-remembered choice from a fixed list (first option is the default). */
 function stored<T extends string>(key: string, options: readonly T[], fallback: T) {
@@ -186,17 +194,18 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     if (localStorage.getItem("quality") === "quality-deep") { localStorage.setItem("quality", "quality-plus"); localStorage.setItem("reviewRounds", "3"); }
   } catch { /* storage blocked */ }
   const mode = dropdown<Quality>({
-    // Only Quick read and Playground are on the menu for now (Nov 2026): Interactive, Creative and Code Lab 7.0 are hidden
+    // Only Quick read and Playground are on the menu for now (Nov 2026): Interactive, Creative, Code Lab 7.0 and Playground 2.0 are hidden
     // while they're being worked on; their code stays, and old explainers made with them still open and show their mode.
     // Lab and Code Lab 1.0-6.0 are off the menu too. A saved choice of any hidden mode falls back to Playground.
     // To bring a mode back, add its line here again:
     //   ["quality-plus", "Interactive", "Sliders, charts, quizzes and worked examples, with every section checked for clarity and facts."],
     //   ["freeform-plus", "Creative", "Every interactive part is custom-built for the topic. More playful."],
     //   ["code-lab-7", "Code Lab 7.0 (beta)", "A deep page with interactive parts written from scratch for each section (at most 4), designed freely like Creative's, then tested and reviewed. Costs more."],
+    //   ["playground-2", "Playground 2.0 (beta)", "Like Playground, but a judge model first picks which parts each playground has (controls, charts, diagrams), then they are built, tested and reviewed."],  (hidden Nov 5 2026, maybe v2)
     label: "Generation mode", key: "quality", fallback: "playground", onChange: () => drawOptions(),
     options: [
-      ["lite-plus", "Quick read", "A short page that is mostly reading, with charts at fixed values. The fastest."],
-      ["playground", "Playground (beta)", "A deep page where up to 4 sections get a hands-on playground: drag, click, play and watch it react. Tested and reviewed."],
+      ["lite-plus", "Reader", "A short page to read, with charts at fixed values. The fastest."],
+      ["playground", "Explorer", "A deep page where up to 4 sections get a hands-on playground: drag, click, play and watch it react. Tested and reviewed."],
     ],
   });
   const effort = segmented<GenEffort>({
@@ -215,7 +224,7 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
 
   // Reader level. Auto lets the server pick it (Quality+/Lite+); the other modes' planner picks it.
   const level = segmented<LevelChoice>({
-    label: "Level", key: "level", fallback: "beginner", onChange: () => drawOptions(),
+    label: "Level", key: "level", fallback: "auto", onChange: () => drawOptions(),
     options: (Object.keys(LEVEL_CHOICES) as LevelChoice[]).map((k) => [k, LEVEL_CHOICES[k].split(":")[0], k === "auto" ? "Auto: chosen from the topic" : LEVEL_CHOICES[k]] as const),
   });
 
@@ -237,8 +246,8 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     h("div.cmp-opt-head", null, h("span.cmp-opt-label", null, "Review rounds"), roundsHint), rounds.el,
     h("p.cmp-opt-note", null, "Each round checks the page and fixes what it finds, and stops early once it's clean. More rounds: slower, costs more."));
   // Not Quick read (a short static page), nor Code Lab 1-3. Code Lab 4.0, 5.0 and 6.0 can: their interactive parts are kept through each round.
-  const isCodeLab = () => mode.value() === "code-lab" || mode.value() === "code-lab-2" || mode.value() === "code-lab-3" || mode.value() === "code-lab-7" || mode.value() === "playground";
-  const noRounds = () => mode.value() === "lite-plus" || (isCodeLab() && mode.value() !== "code-lab-7" && mode.value() !== "playground");
+  const isCodeLab = () => mode.value() === "code-lab" || mode.value() === "code-lab-2" || mode.value() === "code-lab-3" || mode.value() === "code-lab-7" || mode.value() === "playground" || mode.value() === "playground-2";
+  const noRounds = () => mode.value() === "lite-plus" || (isCodeLab() && mode.value() !== "code-lab-7" && mode.value() !== "playground" && mode.value() !== "playground-2");
   const roundsCount = () => (noRounds() ? 0 : rounds.value() === "max" ? 10 : Number(rounds.value()));
 
   // Thinking (Code Lab 2.0 to 6.0): whether Haiku thinks before planning each chart or interactive part (2.0-4.0: also repairs and backups;
@@ -255,7 +264,7 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
   const thinkingRow = h("div.cmp-opt", null,
     h("div.cmp-opt-head", null, h("span.cmp-opt-label", null, "Thinking"), thinkingHint), thinking.el,
     h("p.cmp-opt-note", null, "Off costs about 40% less and is faster. On can keep a few more charts."));
-  const isChartLab = () => mode.value() === "code-lab-2" || mode.value() === "code-lab-3" || mode.value() === "code-lab-7" || mode.value() === "playground";
+  const isChartLab = () => mode.value() === "code-lab-2" || mode.value() === "code-lab-3" || mode.value() === "code-lab-7" || mode.value() === "playground" || mode.value() === "playground-2";
 
   // Page colours: stamped on the page, so it opens and exports in it. First time = what the app shows now.
   const colors = segmented<"light" | "dark">({
@@ -266,25 +275,30 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     ],
   });
 
-  // Level, how hands-on and effort live in a small popover behind "Options"; a dot shows when any is changed.
+  // v1 (Nov 2026): only Effort, Thinking and Page colours are shown. Level, How hands-on and Review rounds are hidden and
+  // send their defaults (Auto, Balanced, Off; not a remembered choice the reader can no longer see); set MORE_OPTIONS to bring them back.
+  const levelValue = () => (MORE_OPTIONS ? level.value() : "auto");
+  const handsValue = () => (MORE_OPTIONS ? hands.value() : "balanced");
+  const roundsValue = () => (MORE_OPTIONS ? roundsCount() : 0);
+
+  // The options live in a small popover behind "Options"; a dot shows when any is changed.
   const optRow = (label: string, hint: string, el: HTMLElement) => h("div.cmp-opt", null, h("div.cmp-opt-head", null, h("span.cmp-opt-label", null, label), h("span.cmp-opt-hint", null, hint)), el);
   const pop = h("div.cmp-pop", { role: "dialog", "aria-label": "Options", hidden: true },
-    optRow("Level", "Who the page is written for", level.el),
-    optRow("How hands-on", "Reading vs. things to play with", hands.el),
+    ...(MORE_OPTIONS ? [optRow("Level", "Who the page is written for", level.el), optRow("How hands-on", "Reading vs. things to play with", hands.el)] : []),
     optRow("Effort", "More thinking: slower, fewer slips", effort.el),
     thinkingRow,
-    roundsRow,
+    ...(MORE_OPTIONS ? [roundsRow] : []),
     optRow("Page colours", "Kept when you export", colors.el));
-  const optBtn = h("button.cmp-opts-btn", { type: "button", "aria-expanded": "false", "aria-haspopup": "dialog", title: "Level, how hands-on, effort" },
+  const optBtn = h("button.cmp-opts-btn", { type: "button", "aria-expanded": "false", "aria-haspopup": "dialog", title: "Effort, thinking, page colours" },
     h("span", { "aria-hidden": "true", html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>' }),
     h("span", null, "Options"), h("span.cmp-opts-dot", { "aria-hidden": "true" }));
   function drawOptions() {
-    optBtn.classList.toggle("is-changed", level.value() !== "beginner" || hands.value() !== "balanced" || effort.value() !== "medium" || roundsCount() > 0
+    optBtn.classList.toggle("is-changed", levelValue() !== "auto" || handsValue() !== "balanced" || effort.value() !== "medium" || roundsValue() > 0
       || (isChartLab() && thinking.value() === "on"));
     thinkingRow.classList.toggle("is-off", !isChartLab());
-    thinkingHint.textContent = isChartLab() ? "Think before planning and building interactive parts" : "Only for Code Lab 2.0–7.0 and Playground";
+    thinkingHint.textContent = isChartLab() ? "Think before planning and building interactive parts" : "Only for Explorer";
     roundsRow.classList.toggle("is-off", noRounds());
-    roundsHint.textContent = noRounds() ? `Not for ${isCodeLab() ? "Code Lab 1–3" : "Quick read"}` : "Extra checking after the page";
+    roundsHint.textContent = noRounds() ? `Not for ${isCodeLab() ? "Code Lab 1–3" : "Reader"}` : "Extra checking after the page";
   }
   const outside = (e: Event) => { if (!pop.contains(e.target as Node) && !optBtn.contains(e.target as Node)) setPop(false); };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setPop(false); optBtn.focus(); } };
@@ -302,12 +316,14 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
   optBtn.addEventListener("click", () => setPop(optBtn.getAttribute("aria-expanded") !== "true"));
   drawOptions();
 
+  const choices = (): ComposerChoices => ({ quality: mode.value(), effort: effort.value(), interactivity: handsValue(), level: levelValue(), reviewRounds: roundsValue(),
+    planThinking: isChartLab() && thinking.value() === "on", colorMode: colors.value() });
+
   const form = h("form.composer", { novalidate: true }, chips, textarea, h("div.cmp-row", null, attach, mode.el, h("div.cmp-opts", null, optBtn, pop), send), file);
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     if (send.disabled) return;
-    opts.onSubmit({ text: textarea.value.trim(), paper, quality: mode.value(), effort: effort.value(), interactivity: hands.value(), level: level.value(), reviewRounds: roundsCount(),
-      planThinking: isChartLab() && thinking.value() === "on", colorMode: colors.value() });
+    opts.onSubmit({ text: textarea.value.trim(), paper, ...choices() });
     paper = undefined;
     textarea.value = "";
     drawChip("");
@@ -319,7 +335,8 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
 
   const wrap = h("div.cmp-wrap", null, form, error);
   /** Let suggestion chips fill the box. */
-  (wrap as HTMLElement & { fill?: (t: string) => void }).fill = (t: string) => { textarea.value = t; sync(); textarea.focus(); };
+  (wrap as ComposerEl).fill = (t: string) => { textarea.value = t; sync(); textarea.focus(); };
+  (wrap as ComposerEl).choices = choices;
   queueMicrotask(() => { sync(); if (opts.autofocus) textarea.focus(); });
   return wrap;
 }

@@ -8,7 +8,7 @@
 // Before accounts existed, history lived only in the browser ("explainer-studio" database);
 // legacyRecords()/importLegacy() move it into the account once.
 
-import type { ExplainerSpec, GenerateRequest, ProgressStep, SectionResponse, Usage } from "../../../shared/spec";
+import type { ExplainerSpec, GenerateRequest, PickOption, ProgressStep, SectionResponse, Usage } from "../../../shared/spec";
 import { ApiError, apiJSON } from "../auth";
 import type { ChatMsg } from "../render/chatbot";
 import type { Progress } from "../render/explainer";
@@ -25,8 +25,12 @@ export interface ExplainerRecord {
    * "asking": a Quality request waiting for the answer to "What do you want to add to each section?".
    * "deciding": a follow-up whose meaning wasn't clear (or is still being routed): revise the
    * explainer above, or a new one? (Old records may say "choosing"; app.ts turns those into errors.)
+   * "picking": a revise follow-up on a Playground or Quick read page, being matched to sections (POST /api/followup/pick),
+   * or waiting for the reader's answer to `pick.question`.
    */
-  status: "deciding" | "asking" | "generating" | "done" | "error";
+  status: "deciding" | "asking" | "picking" | "generating" | "done" | "error";
+  /** "picking": the question the reader is asked when the request could mean quite different changes. */
+  pick?: { question: { text: string; options: PickOption[] } };
   /** Conversation: the id of its first record (absent = this record starts its own conversation). */
   thread?: string;
   /** A follow-up in a conversation: a new version of `baseId`, or a related new explainer after it. add: made with "Add section". */

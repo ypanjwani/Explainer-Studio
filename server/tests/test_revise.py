@@ -13,6 +13,7 @@ from explainer import pipeline
 from explainer.core.followup import revision_request
 from explainer.core.validate import default_design
 from explainer.followup import parse_follow_up, parse_kept, parse_widgets
+from explainer.llm import ReaderError
 from explainer.revise import merge_revision, parse_revision, restore_kept_widgets, revision_summary
 
 SAMPLE = json.loads((Path(__file__).parent / "fixtures" / "sample.json").read_text(encoding="utf-8"))
@@ -171,19 +172,31 @@ def test_pipeline_runs_later_steps_on_changed_stages_only(monkeypatch):
     assert plan_done["detail"] == "1 section added, 8 kept as they were"
 
 
-def test_lite_revisions_still_rewrite(monkeypatch):
+def test_a_page_wide_quick_read_revision_changes_every_section_as_targets(monkeypatch):
+    """Quick read pages no longer rewrite the whole outline: a page-wide pick is a scoped text change of every section,
+    told the Quick read rules, and the level may change."""
     seen = {}
 
     def fake_write_outline(client, request, emit, usage, system, parse, effort, *a, **k):
         seen["request"] = request
-        p = parse(copy.deepcopy(OLD))
+        p = parse({**copy.deepcopy(OLD), "level": "practitioner"})
         return {"outline": p["outline"], "warnings": []}
 
     monkeypatch.setattr(pipeline, "write_outline", fake_write_outline)
-    req = {"mode": "concept", "text": "shorter", "quality": "lite-plus",
-           "followUp": {"kind": "revise", "outline": json.dumps(OLD), "design": default_design(OLD)}}
+    req = {"mode": "concept", "text": "make it more advanced", "quality": "lite-plus",
+           "followUp": {"kind": "revise", "outline": json.dumps(OLD), "design": default_design(OLD), "pick": {"targets": [], "pageWide": True}}}
     spec = pipeline.generate(None, req, lambda e: None)["spec"]
-    assert "complete revised outline" in seen["request"] and "revision" not in spec
+    assert "Change ONLY these parts" in seen["request"] and "Quick read page" in seen["request"]
+    assert all(f'stage "{s["id"]}"' in seen["request"] for s in OLD["stages"])
+    assert OLD["level"] != "practitioner" and spec["level"] == "practitioner"
+
+
+def test_a_quick_read_revision_the_finder_cant_place_is_an_error(monkeypatch):
+    monkeypatch.setattr(pipeline, "find_targets", lambda *a: None)
+    req = {"mode": "concept", "text": "hmm", "quality": "lite-plus",
+           "followUp": {"kind": "revise", "outline": json.dumps(OLD), "design": default_design(OLD)}}
+    with pytest.raises(ReaderError):
+        pipeline.generate(None, req, lambda e: None)
 
 
 def test_write_notes_reuses_kept(monkeypatch):
@@ -261,7 +274,8 @@ def test_a_revision_keeps_the_widgets_of_the_stages_it_did_not_change(monkeypatc
     monkeypatch.setattr(pipeline, "clarity_check", lambda client, jev_key, spec, usage, *a, only=None, **k: (spec, "checked"))
     monkeypatch.setattr(pipeline, "fact_check", lambda client, jev_key, spec, usage, *a, only=None, **k: (spec, "checked"))
     monkeypatch.setattr(pipeline, "write_notes", lambda client, spec, extras, usage, kept=None: (spec, ""))
-    req = {"mode": "concept", "text": "Add discrete distributions", "quality": "playground", "extras": [],
+    # Playground 2.0 still takes the whole-page path (Playground and Quick read pick their sections first: followup_pick.py).
+    req = {"mode": "concept", "text": "Add discrete distributions", "quality": "playground-2", "extras": [],
            "followUp": parse_follow_up({"kind": "revise", "outline": json.dumps(compact), "design": default_design(OLD),
                                         "widgets": {"tokens": [chart], "sampling": [play]}})}
     spec = pipeline.generate(None, req, lambda e: None, jev_key="jev")["spec"]

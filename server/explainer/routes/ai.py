@@ -6,6 +6,8 @@
   POST /api/chat      -> SSE stream of {t: text} deltas, then {done: true}
   POST /api/edit      -> JSON {content, usd}: one Edit chat turn (Haiku picks tools; the browser runs them)
   POST /api/route     -> JSON {kind, usd}: does a follow-up revise the explainer above or ask for a new one?
+  POST /api/followup/pick -> JSON {targets, pageWide} | {question} | {error}, + usd: the sections a typed follow-up
+                         on a Playground or Quick read page changes (followup_pick.py)
   POST /api/section   -> JSON {md, sources, searches, usd}: a section tool the reader clicked (web search)
   POST /api/formula   -> JSON {note, usd}: "Go deeper" on a formula (formula.py); the app saves the note on the page
   POST /api/feedback  -> JSON {feedbackId, plan, preference, usd}: the Feedback button (feedback.py), a plan the
@@ -23,7 +25,7 @@ from typing import Any, Callable
 from flask import Blueprint, Response, current_app, g
 from limits import parse as parse_limit
 
-from .. import data, feedback, history, quota, sse
+from .. import data, feedback, followup_pick, history, quota, sse
 from ..edit_chat import edit_turn, parse_edit
 from ..followup import parse_route, route_follow_up
 from ..formula import formula_turn, parse_formula
@@ -140,7 +142,8 @@ def generate_route() -> Response:
                   **({"rejected": r["rejected"]} if req.get("debugRejected") and r.get("rejected") else {}),
                   **({"labMarks": r["labMarks"]} if req.get("debugRejected") and r.get("labMarks") else {}),
                   **({"labMath": r["labMath"]} if req.get("debugRejected") and r.get("labMath") else {}),
-                  **({"labLook": r["labLook"]} if req.get("debugRejected") and r.get("labLook") else {})})
+                  **({"labLook": r["labLook"]} if req.get("debugRejected") and r.get("labLook") else {}),
+                  **({"labBlueprint": r["labBlueprint"]} if req.get("debugRejected") and r.get("labBlueprint") else {})})
         except GenerationCancelled:
             usd = usage.summary()["totalUsd"]  # what was spent until it stopped still counts
             log.info("generation for deleted record %s stopped after $%.4f", record_id, usd)
@@ -184,6 +187,16 @@ def _chat_turn(kind: str, message: str, run: Callable[[Any], dict], parse: Calla
 @require_auth
 def route_route() -> Response:
     return _chat_turn("route", "Too many messages at once. Please wait a minute.", route_follow_up, parse_route)
+
+
+@bp.post("/followup/pick")
+@require_auth
+def followup_pick_route() -> Response:
+    """A typed follow-up on a Playground or Quick read page: which sections it changes, or a question for the reader
+    (followup_pick.py). Not one of the day's explainers; its cost is recorded."""
+    jev_key = _ai()["jev_key"]
+    return _chat_turn("followup-pick", "Too many messages at once. Please wait a minute.",
+                      lambda client, req: followup_pick.handle(client, jev_key, req), followup_pick.parse_pick_request)
 
 
 @bp.post("/edit")

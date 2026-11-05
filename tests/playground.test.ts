@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
-import { PLAYGROUND_SYSTEM } from "../prompts/prompts";
+import { PLAYGROUND2_SYSTEM, PLAYGROUND_SYSTEM } from "../prompts/prompts";
 // The runtime exactly as the frame gets it (same files and order).
 import { PLAYGROUND_SOURCES as RUNTIME } from "../app/src/render/components/playground-src";
 
@@ -177,6 +177,29 @@ describe("playground prompt", () => {
   it("stays topic-neutral and has no template leftovers", () => {
     expect(PLAYGROUND_SYSTEM).not.toContain("${");
     expect(PLAYGROUND_SYSTEM).toContain('{"error": "no_playground"}');
+  });
+});
+
+describe("Playground 2.0 prompt (playground-2: Jev picks the parts, Haiku fills the blueprint)", () => {
+  it("lists exactly the runtime's helpers and has no template leftovers", () => {
+    const line = PLAYGROUND2_SYSTEM.split("\n").find((l) => l.startsWith("seed, rand,"));
+    expect(line?.split(", ")).toEqual(Object.keys(helpers));
+    expect(PLAYGROUND2_SYSTEM).not.toContain("${");
+    expect(PLAYGROUND2_SYSTEM).toContain('{"error": "no_playground"}');
+  });
+
+  it("follows the blueprint instead of choosing the views", () => {
+    expect(PLAYGROUND2_SYSTEM).toContain("## Your blueprint");
+    expect(PLAYGROUND2_SYSTEM).toContain("plan.deviations");
+    expect(PLAYGROUND2_SYSTEM).not.toContain("## Your views");
+    expect(PLAYGROUND2_SYSTEM).not.toMatch(/7\. covers:/);
+    expect(PLAYGROUND2_SYSTEM).not.toContain("Choose freely");
+  });
+
+  it("shares Playground's reference sections word for word", () => {
+    const ref = PLAYGROUND_SYSTEM.slice(PLAYGROUND_SYSTEM.indexOf("## Spec format"), PLAYGROUND_SYSTEM.indexOf("- Choose freely"));
+    expect(ref.length).toBeGreaterThan(5000);
+    expect(PLAYGROUND2_SYSTEM).toContain(ref);
   });
 });
 
@@ -356,7 +379,7 @@ describe("playground layout check: text, heatmaps, axis names, links through sha
   });
 });
 
-// Nov 1 fixes from the rubric eval (playground-rubric-eval-results.md), measured on 206 saved playgrounds.
+// Nov 1 fixes from the rubric eval (.claude/playground-rubric-eval-results.md), measured on 206 saved playgrounds.
 describe("playground: growing charts, legends, numbers, dots, bar headroom, fitted labels", () => {
   const structures = require("../shared/playground/structures.cjs");
   // one chart; extra components (a Step button, Play...) come first
@@ -732,5 +755,61 @@ describe("playground worked-example checks", () => {
   it("is empty without checks, and the prompt describes them", () => {
     expect(validate(base).checks).toEqual([]);
     expect(PLAYGROUND_SYSTEM).toMatch(/Worked-example checks:/);
+  });
+});
+
+// Nov 4: heatmap values by default, a flat-heatmap message, Reset greyed until something changes, a hint for drag-only.
+describe("playground: heatmap values, Reset and the drag hint", () => {
+  const s1 = { id: "s1", type: "slider", label: "a", key: "a", min: 0, max: 2, step: 1 };
+  const chart = (draw: string, extra: Record<string, unknown> = { x: [0, 2], y: [0, 2] }) => ({
+    title: "t", state: { a: 1 }, components: [s1, { id: "c1", type: "chart", title: "C", draw, ...extra }],
+  });
+  const cells = (doc: Document) => [...doc.querySelectorAll("svg .mk-cellval")].map((t) => t.textContent);
+
+  it("writes a small heatmap's values unless showValues is false", () => {
+    expect(cells(frame(chart("return [heatmap([[0.9 * state.a, 0.1], [0.25, 0.7]])];")).doc)).toEqual(["0.9", "0.1", "0.25", "0.7"]);
+    expect(cells(frame(chart("return [heatmap([[0.9 * state.a, 0.1], [0.25, 0.7]], { showValues: false })];")).doc)).toEqual([]);
+  });
+
+  it("leaves big grids, tiny cells and charts with their own text marks colour only", () => {
+    const big = "return [heatmap(range(30).map((r) => range(30).map((c) => state.a * (r + c))))];";
+    expect(cells(frame(chart(big, { x: [0, 30], y: [0, 30] })).doc)).toEqual([]);
+    expect(cells(frame(chart("return [heatmap([[0.9 * state.a, 0.1], [0.25, 0.7]]), text(1, 1, 'note')];")).doc)).toEqual([]);
+  });
+
+  it("shortens long values to fit narrow cells, never showing a non-zero as 0", () => {
+    const draw = "return [heatmap(range(4).map((r) => range(12).map((c) => state.a * (r * 12 + c + 1) / 7.123456)))];";
+    const vals = cells(frame(chart(draw, { x: [0, 12], y: [0, 4] })).doc);
+    expect(vals).toHaveLength(48);
+    expect(vals.every((v) => v!.length <= 4 && !/^-?0?\.?0*$/.test(v!))).toBe(true);
+  });
+
+  it("reports a heatmap whose cells are all the same in every state, not one that changes", () => {
+    const flat = validate(chart("return [heatmap([[0, 0], [0, 0]]), point(state.a, 1)];"));
+    expect(flat.ok).toBe(true);
+    expect(flat.layout.join("\n")).toMatch(/every cell of the heatmap has the same value \(0\)/);
+    const moves = validate(chart("return [heatmap([[state.a, 0], [0, 0]])];"));
+    expect(moves.layout.join("\n")).not.toMatch(/same value/);
+    // a grid whose size follows the slider is the lesson itself (n x n pairs), even with every cell 1
+    const grows = validate(chart("return [heatmap(range(state.a + 1).map(() => range(state.a + 1).map(() => 1)))];"));
+    expect(grows.layout.join("\n")).not.toMatch(/same value/);
+  });
+
+  it("greys Reset until something changes, and again after pressing it", () => {
+    const { doc, dom } = frame(chart("return [heatmap([[state.a, 0], [0, 1]])];"));
+    const reset = [...doc.querySelectorAll("button.pg-btn")].find((b) => b.textContent === "Reset") as HTMLButtonElement;
+    expect(reset.disabled).toBe(true);
+    const slider = doc.querySelector(".pg-slider input") as HTMLInputElement;
+    slider.value = "2";
+    slider.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    expect(reset.disabled).toBe(false);
+    reset.click();
+    expect(reset.disabled).toBe(true);
+  });
+
+  it("adds a hint only when dragging or clicking a chart is the only control", () => {
+    const dragOnly = { ...DIAGRAM, components: DIAGRAM.components.filter((c) => c.type !== "slider") };
+    expect(frame(dragOnly).doc.querySelector(".pg-hint")?.textContent).toBe("Drag the points on the chart.");
+    expect(frame(DIAGRAM).doc.querySelector(".pg-hint")).toBeNull();
   });
 });

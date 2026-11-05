@@ -82,7 +82,7 @@ def page_kind(outline: dict, quality: str | None = None) -> str | None:
         return "playground"
     if "code-lab" in kinds:
         return "code-lab"
-    return {"playground": "playground", "code-lab-7": "code-lab"}.get(quality or "")
+    return {"playground": "playground", "playground-2": "playground", "code-lab-7": "code-lab"}.get(quality or "")
 
 
 def settings_for(kind: str, effort: str, think: bool = True) -> cl.CodeLabSettings:
@@ -188,6 +188,14 @@ def _edit_playground(client: anthropic.Anthropic, usage: UsageLog, jev_key: str 
         return "its playground couldn't be read back"
     why: list[str] = []
     payload = {**cl._section(view, si), "hint": ""}
+    # What the checker finds in the current playground ("it shows nothing", "it doesn't work" requests): the edit aims at it.
+    try:
+        now = cl.check_playground(spec)
+        seen = [*(now.get("problems") or []), *(now.get("layout") or [])]
+    except Exception:
+        seen = []
+    if seen:
+        what = f"{what} The checker finds these problems in the current playground (fix them too): {'; '.join(str(x) for x in seen[:6])}"
     new = cl._pg_ask(client, usage, "playground edit", payload, st, why, edit={"yourPreviousSpec": spec, "request": what})
     lower = cl._lower(st.build)
     if new is None and why and cl.CUTOFF in why[-1] and lower:

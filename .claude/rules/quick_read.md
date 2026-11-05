@@ -25,5 +25,6 @@ paths:
   - Pages have no widgets, so a "widget" request becomes a section rewrite (`targets._as_blocks`).
   - Text changes are scoped to the targeted sections only (`targets.py`, `revise.py`).
   - A typed revise follow-up stays in Quick read, even if Playground is selected in the composer.
-  - Known issue: a targeted edit is written with the full planner prompt (`planner_system()`), not `LITE_SYSTEM`. Dropped blocks are stripped afterwards, but a written slider is only hidden by `noControls`, so the text could mention a control the reader can't see.
+  - Sections are picked first (`followup_pick.py`, see `followup.md`): a whole-page request is a text change of every section, never a full rewrite.
+  - A targeted edit is still written with the full planner prompt (`planner_system()`, change format), plus `LITE_EDIT_NOTE` (Nov 5 2026): no quizzes, examples or new controls, and never "move the slider". Dropped blocks are stripped afterwards; sliders are not (charts read their values), only hidden by `noControls`.
 - **Retry** works as in other modes: same request, a fresh take, the old page replaced.

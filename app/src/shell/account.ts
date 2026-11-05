@@ -142,7 +142,7 @@ export function authView(opts: { onDone: () => void; mode?: "login" | "register"
   draw();
   queueMicrotask(() => email.focus());
 
-  const logo = () => h("div.brand-logo", null, h("span.brand-mark", { "aria-hidden": "true" }, "✦"), "Explainer Studio");
+  const logo = () => h("div.brand-logo", null, h("span.brand-mark", { "aria-hidden": "true" }, "✦"), "ClariTale");
   const perk = (t: string) => h("span", null, h("span.icon", { "aria-hidden": "true", html: CHECK }), t);
   return h("div.auth-page.shell", null,
     h("aside.auth-brand", null,

@@ -43,7 +43,7 @@ from .revise import parse_revision, restore_kept_widgets
 
 log = logging.getLogger("explainer.targets")
 
-PARTS = ("widget", "text", "section", "new-section")
+PARTS = ("widget", "text", "section", "new-section", "remove")
 MAX_TARGETS = 6  # more than this is a request about the page, not about a part of it
 SNIPPET = 200
 MAX_WORKERS = 4
@@ -128,13 +128,70 @@ def find_targets(client: anthropic.Anthropic, usage: UsageLog, outline: dict, te
         return None
 
 
+MAX_OPTIONS = 4
+QUESTION_CHARS = 300
+LABEL_CHARS = 120
+
+
+def clean_question(raw: Any, outline: dict) -> dict | None:
+    """{"text", "options": [{"label", "targets", "pageWide"}]} from the finder's question, or None when there is none or it is
+    unusable. An option whose targets don't match the page is dropped; fewer than 2 options left = no question."""
+    if not isinstance(raw, dict):
+        return None
+    text = js_slice(re.sub(r"\s+", " ", str(raw.get("text") or "")).strip(), 0, QUESTION_CHARS)
+    options = []
+    for o in raw.get("options") if isinstance(raw.get("options"), list) else []:
+        if not isinstance(o, dict):
+            continue
+        label = js_slice(re.sub(r"\s+", " ", str(o.get("label") or "")).strip(), 0, LABEL_CHARS)
+        found = clean_targets({"targets": o.get("targets") or [], "pageWide": o.get("pageWide") is True}, outline)
+        if label and found:
+            options.append({"label": label, **found})
+    if not text or len(options) < 2:
+        return None
+    return {"text": text, "options": options[:MAX_OPTIONS]}
+
+
+def find_targets_ask(client: anthropic.Anthropic, usage: UsageLog, outline: dict, text: str) -> dict | None:
+    """The finder for Playground and Quick read pages (TARGET_ASK_SYSTEM): {"targets", "pageWide"} like find_targets, or
+    {"question"} when the request could mean quite different changes. None when the call fails or the reply is unusable."""
+    try:
+        msg = client.messages.create(
+            model=HAIKU,
+            max_tokens=2500,
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": data.formats()["targetsAsk"]}},
+            system=cached_system(data.prompt("TARGET_ASK_SYSTEM")),
+            messages=[{"role": "user", "content": f"{outline_digest(outline)}\n\nThe reader's request: {text}"}],
+        )
+        usage.add_message("follow-up targets", msg)
+        raw = json_parse(text_of(msg))
+    except Exception:
+        log.exception("Follow-up target finder (ask) failed")
+        return None
+    question = clean_question(raw.get("question") if isinstance(raw, dict) else None, outline)
+    if question:
+        return {"question": question}
+    return clean_targets(raw, outline)
+
+
+def every_section(outline: dict, what: str) -> list[dict]:
+    """A request about the whole page as targets: a "text" change of every section (the page-level fields may change too)."""
+    return [{"part": "text", "stage": st["id"], "after": "", "what": what} for st in outline["stages"]]
+
+
+def remove_stages(outline: dict, ids: set[str]) -> dict:
+    """The outline without the named stages, by code (no planner call); the page always keeps at least one stage."""
+    kept = [st for st in outline["stages"] if st["id"] not in ids]
+    return {**outline, "stages": kept} if kept else outline
+
+
 # ---------- changing the text ----------
 
 
-def guard_untouched(old: dict, new: dict, allowed: set[str], new_stages: int) -> tuple[dict, list[str]]:
+def guard_untouched(old: dict, new: dict, allowed: set[str], new_stages: int, page_fields: bool = False) -> tuple[dict, list[str]]:
     """`new` with everything the targets didn't name put back as it was in `old`: a changed stage that wasn't a target, a
-    stage that was removed, the page's title, subtitle, key intuition and level, and any new stage past `new_stages`.
-    Returns (outline, warnings)."""
+    stage that was removed, the page's title, subtitle, key intuition and level (unless page_fields: a change of the whole
+    page may change them), and any new stage past `new_stages`. Returns (outline, warnings)."""
     old_by = {s["id"]: s for s in old["stages"]}
     warnings: list[str] = []
     stages: list[dict] = []
@@ -160,7 +217,7 @@ def guard_untouched(old: dict, new: dict, allowed: set[str], new_stages: int) ->
             present.add(st["id"])
     out = {**new, "stages": stages}
     for k in PAGE_FIELDS:
-        if k in old:
+        if k in old and not page_fields:
             out[k] = old[k]
     return out, warnings
 
@@ -220,7 +277,17 @@ def _compact_json(outline: dict) -> str:
 Ask = Callable[[str, Callable[[Any], dict]], dict]  # (planner request, parse) -> {"outline", "warnings", "revision"?}
 
 
-def edit_text(ask: Ask, follow: dict, current: dict, targets: list[dict], request: str, prose_only: bool = False) -> tuple[dict, set[str], list[str]]:
+# Quick read pages (lite-plus): a text edit is written by the full planner prompt, so it is told the page's own rules. Sliders
+# are not stripped afterwards (a chart reads its values from them; a Quick read page hides them), so the text must not ask
+# the reader to use one.
+LITE_EDIT_NOTE = ("This is a Quick read page: short and mostly reading. In the stages you write, use no quizzes, questions, reveal or "
+                  "predict blocks, worked examples, flip cards, experiments, sampling or training blocks, and add no new sliders, "
+                  "choices, toggles or presets. Charts are shown at fixed values: never ask the reader to move, drag, click or "
+                  "change anything.")
+
+
+def edit_text(ask: Ask, follow: dict, current: dict, targets: list[dict], request: str, prose_only: bool = False,
+              page_fields: bool = False, lite: bool = False) -> tuple[dict, set[str], list[str]]:
     """(outline, changed stage ids, warnings): `current` with the text targets changed by one planner call (the change format of
     revise.py, scoped to the targets). `current` may hold real widgets; the planner sees them as placeholders and they come
     back where their placeholders are. prose_only (a Code Lab 7.0 or Playground page, whose interactive parts are widgets): the planner
@@ -231,6 +298,8 @@ def edit_text(ask: Ask, follow: dict, current: dict, targets: list[dict], reques
     req = revision_request(scope_text(request, targets, compact, _plans(current)), asked, changes=True)
     if prose_only:
         req += "\n\n" + PLANNER_NOTE
+    if lite:
+        req += "\n\n" + LITE_EDIT_NOTE
     allowed = {t["stage"] for t in targets if t["part"] != "new-section"}
     new_stages = sum(1 for t in targets if t["part"] == "new-section")
     scoped: list[str] = []
@@ -244,7 +313,7 @@ def edit_text(ask: Ask, follow: dict, current: dict, targets: list[dict], reques
     except Exception:
         log.exception("Follow-up text edit failed")
         return current, set(), ["Couldn't change the text as asked; it was kept as it was."]
-    guarded, warnings = guard_untouched(compact, r["outline"], allowed, new_stages)
+    guarded, warnings = guard_untouched(compact, r["outline"], allowed, new_stages, page_fields)
     warnings = [*scoped, *warnings]
     before = {s["id"]: s for s in compact["stages"]}
     if prose_only:
@@ -295,18 +364,29 @@ def _run_edits(client, usage, jev_key, outline, jobs: list[tuple[int, int, str]]
 
 
 def apply_targets(client: anthropic.Anthropic, usage: UsageLog, jev_key: str | None, follow: dict, base: dict, targets: list[dict],
-                  request: str, ask: Ask, effort: str = "medium", think: bool = True, quality: str | None = None, prose_only: bool = False) -> dict:
+                  request: str, ask: Ask, effort: str = "medium", think: bool = True, quality: str | None = None, prose_only: bool = False,
+                  page_fields: bool = False) -> dict:
     """{"outline", "warnings", "revision": {"changed", "removed", "widgets"}}: the page with just the targets changed.
     base: the previous outline as the follow-up carries it (widgets as placeholders); follow["widgets"] holds the real ones."""
     warnings: list[str] = []
+    lite = quality == "lite-plus"
     targets = _as_blocks(targets, restore_kept_widgets(base, follow["widgets"]) if follow.get("widgets") else base, quality)
+    gone = {t["stage"] for t in targets if t["part"] == "remove"}
+    targets = [t for t in targets if t["part"] != "remove" and t["stage"] not in gone]
     text_targets = [t for t in targets if t["part"] != "widget"]
     widget_targets = [t for t in targets if t["part"] == "widget"]
 
     # The page with its real widgets back (the follow-up's outline only has placeholders); edit_text keeps them in place.
     current, text_changed = (restore_kept_widgets(base, follow["widgets"]) if follow.get("widgets") else base), set()
+    removed = 0
+    if gone:  # "remove" targets: dropped by code, with their widgets; the page keeps at least one stage
+        before = len(current["stages"])
+        current = remove_stages(current, gone)
+        removed = before - len(current["stages"])
+        if removed < len(gone):
+            warnings.append("Couldn't remove every section asked for: a page needs at least one.")
     if text_targets:
-        current, text_changed, w = edit_text(ask, follow, current, text_targets, request, prose_only)
+        current, text_changed, w = edit_text(ask, follow, current, text_targets, request, prose_only, page_fields, lite)
         warnings += w
 
     # 1. widgets that exist: changed side by side; the page keeps the old one when a change fails
@@ -348,7 +428,7 @@ def apply_targets(client: anthropic.Anthropic, usage: UsageLog, jev_key: str | N
             lesson = str((plan or {}).get("lesson") or "")
             fixes.append({"part": "text", "stage": sid, "after": "", "what": f"Make the text match the interactive part: {why}." + (f" The interactive part teaches: {lesson}" if lesson else "")})
     if fixes:
-        current, more, w = edit_text(ask, follow, current, fixes, request, prose_only)
+        current, more, w = edit_text(ask, follow, current, fixes, request, prose_only, lite=lite)
         text_changed |= more
         warnings += w
     back = []
@@ -370,5 +450,5 @@ def apply_targets(client: anthropic.Anthropic, usage: UsageLog, jev_key: str | N
                 warnings.append(f'The text and the interactive part in "{current["stages"][si].get("label", "")}" may not match after this change.')
 
     ids = [s["id"] for s in current["stages"]]
-    revision = {"changed": [i for i in ids if i in text_changed], "removed": 0, "widgets": [i for i in ids if i in widgets_changed]}
+    revision = {"changed": [i for i in ids if i in text_changed], "removed": removed, "widgets": [i for i in ids if i in widgets_changed]}
     return {"outline": current, "warnings": warnings, "revision": revision}

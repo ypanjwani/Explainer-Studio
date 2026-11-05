@@ -68,19 +68,41 @@ FEEDBACK_TARGETS = 6  # like targets.MAX_TARGETS
 FEEDBACK_WHAT = 300
 
 
-def parse_feedback_plan(fb: Any) -> dict | None:
-    """FollowUp.feedback (Feedback v2): the change the reader confirmed, {id, targets, keep, pageWide}. Only well-formed
-    targets are kept; the pipeline then checks them against the page (targets.clean_targets). None when unusable."""
-    if not isinstance(fb, dict) or not isinstance(fb.get("id"), str) or not FEEDBACK_ID.match(fb["id"]):
-        return None
+def parse_targets(raw: Any, parts: tuple[str, ...]) -> list[dict]:
+    """Well-formed targets only (part in `parts`, a change described); checked against the page later (targets.clean_targets)."""
     targets = []
-    for t in fb.get("targets") if isinstance(fb.get("targets"), list) else []:
-        if not isinstance(t, dict) or t.get("part") not in FEEDBACK_PARTS:
+    for t in raw if isinstance(raw, list) else []:
+        if not isinstance(t, dict) or t.get("part") not in parts:
             continue
         what = js_trim(js_slice(" ".join(_str(t.get("what")).split()), 0, FEEDBACK_WHAT))
         if what:
             targets.append({"part": t["part"], "stage": js_slice(_str(t.get("stage")), 0, 80),
                             "after": js_slice(_str(t.get("after")), 0, 80), "what": what})
+    return targets
+
+
+PICK_PARTS = (*FEEDBACK_PARTS, "remove")
+PICK_TARGETS = 20  # like feedback_pick.MAX_CARD_SECTIONS
+
+
+def parse_pick(p: Any) -> dict | None:
+    """FollowUp.pick: the parts a typed follow-up on a Playground or Quick read page changes, as /api/followup/pick (or the
+    reader's answer to its question) chose them: {targets, pageWide}. None when unusable."""
+    if not isinstance(p, dict):
+        return None
+    page_wide = p.get("pageWide") is True
+    targets = [] if page_wide else parse_targets(p.get("targets"), PICK_PARTS)[:PICK_TARGETS]
+    if not page_wide and not targets:
+        return None
+    return {"targets": targets, "pageWide": page_wide}
+
+
+def parse_feedback_plan(fb: Any) -> dict | None:
+    """FollowUp.feedback (Feedback v2): the change the reader confirmed, {id, targets, keep, pageWide}. Only well-formed
+    targets are kept; the pipeline then checks them against the page (targets.clean_targets). None when unusable."""
+    if not isinstance(fb, dict) or not isinstance(fb.get("id"), str) or not FEEDBACK_ID.match(fb["id"]):
+        return None
+    targets = parse_targets(fb.get("targets"), FEEDBACK_PARTS)
     keep = [js_slice(k, 0, 80) for k in fb.get("keep") if isinstance(k, str) and k.strip()][:20] if isinstance(fb.get("keep"), list) else []
     page_wide = fb.get("pageWide") is True
     if not page_wide and not targets:
@@ -122,6 +144,11 @@ def parse_follow_up(f: Any) -> dict | None | str:
             if fb is None:
                 return "The feedback's change couldn't be read. Send the feedback again."
             out["feedback"] = fb
+        if f.get("pick") is not None and not out.get("add") and not out.get("feedback"):  # /api/followup/pick's choice
+            pk = parse_pick(f["pick"])
+            if pk is None:
+                return "The part to change couldn't be read. Send your request again."
+            out["pick"] = pk
         return out
     if f.get("kind") == "new":
         previous = _str(f.get("previous"))

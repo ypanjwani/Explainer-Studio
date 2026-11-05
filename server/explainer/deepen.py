@@ -194,9 +194,9 @@ def audit(client: anthropic.Anthropic, f: dict, spec: dict, findings: list[dict]
 _WIDGET_NOTE = ('A text block that reads "(interactive widget: ...)" stands for a finished interactive widget '
                 "written for this page. Keep every such block exactly as it is and where it is; widgets can't be "
                 "changed here, so fix the text around them instead.")
-MODE_NOTE = {"freeform-plus": _WIDGET_NOTE, "scene-plus": _WIDGET_NOTE, "code-lab-7": _WIDGET_NOTE, "playground": _WIDGET_NOTE}  # Creative widgets, Lab scenes, Code Lab 7.0 widgets, Playground
+MODE_NOTE = {"freeform-plus": _WIDGET_NOTE, "scene-plus": _WIDGET_NOTE, "code-lab-7": _WIDGET_NOTE, "playground": _WIDGET_NOTE, "playground-2": _WIDGET_NOTE}  # Creative widgets, Lab scenes, Code Lab 7.0 widgets, Playground
 # Modes whose first page is written in their own mode and whose built parts an improve must keep (restore_widgets).
-OWN_MODES = ("freeform-plus", "scene-plus", "code-lab-7", "playground")
+OWN_MODES = ("freeform-plus", "scene-plus", "code-lab-7", "playground", "playground-2")
 
 
 BUILT_BLOCKS = ("widget", "scene")  # blocks an improve can't rewrite: Creative's widgets and Lab's scenes

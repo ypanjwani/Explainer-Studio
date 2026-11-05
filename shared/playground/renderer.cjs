@@ -96,8 +96,28 @@
       else box = charts;
       mount(box, c, slotsById[c.id], ctx);
     }
-    // Every playground gets exactly one Reset, last in the button row.
-    components.button(buttons, { id: 'reset', type: 'button', action: 'reset' }, {}, ctx);
+    // Added Nov 4: when dragging or clicking a chart is the only control, say so (otherwise the chart looks dead).
+    const handControls = spec.components.filter((c) => CONTROL_TYPES.includes(c.type) && !(c.type === 'button' && c.action === 'reset'));
+    const handCharts = spec.components.filter((c) => c.type === 'chart' && (c.onDrag || c.onClick));
+    if (!handControls.length && handCharts.length) {
+      const named = spec.components.filter((c) => c.type === 'chart').length > 1;
+      const hint = document.createElement('p');
+      hint.className = 'pg-hint';
+      const names = (list) => (named ? list.map((c) => (c.title ? `"${c.title}"` : 'the chart')) : ['the chart'])
+        .filter((t, i, all) => all.indexOf(t) === i).join(' and ');
+      const drag = handCharts.filter((c) => c.onDrag), click = handCharts.filter((c) => !c.onDrag);
+      hint.textContent = [drag.length ? `Drag the points on ${names(drag)}.` : '', click.length ? `Click ${names(click)}.` : '']
+        .filter(Boolean).join(' ');
+      controls.append(hint);
+    }
+    // Every playground gets exactly one Reset, last in the button row. Added Nov 4: greyed until something changes
+    // (a slider, a Play tick, a button, a drag), so an untouched playground doesn't offer a Reset that does nothing.
+    const resetBtn = components.button(buttons, { id: 'reset', type: 'button', action: 'reset' }, {}, ctx);
+    const startJson = JSON.stringify(store.get());
+    if (resetBtn) {
+      resetBtn.disabled = true;
+      store.subscribe((st) => { resetBtn.disabled = JSON.stringify(st) === startJson; });
+    }
     controls.append(buttons);
     if (!controls.children.length) controls.remove();
     if (!readouts.children.length) readouts.remove();

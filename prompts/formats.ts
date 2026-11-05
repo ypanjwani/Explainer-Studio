@@ -191,6 +191,46 @@ export const FORMATS = {
     required: ["targets", "pageWide"],
     additionalProperties: false,
   },
+  /** Follow-up targets for Playground and Quick read pages (TARGET_ASK_SYSTEM): targets incl. "remove", or a question for the reader. */
+  targetsAsk: (() => {
+    const target = {
+      type: "object",
+      properties: {
+        part: { type: "string", enum: ["widget", "text", "section", "new-section", "remove"] },
+        stage: { type: "string" },
+        after: { type: "string" },
+        what: { type: "string" },
+      },
+      required: ["part", "stage", "after", "what"],
+      additionalProperties: false,
+    };
+    return {
+      type: "object",
+      properties: {
+        targets: { type: "array", items: target },
+        pageWide: { type: "boolean" },
+        question: {
+          type: "object",
+          properties: {
+            text: { type: "string" },
+            options: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { label: { type: "string" }, targets: { type: "array", items: target }, pageWide: { type: "boolean" } },
+                required: ["label", "targets", "pageWide"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["text", "options"],
+          additionalProperties: false,
+        },
+      },
+      required: ["targets", "pageWide", "question"],
+      additionalProperties: false,
+    };
+  })(),
   /** Fact check: Haiku's verdict and fixes for flagged claims. */
   repair: {
     type: "object", additionalProperties: false, required: ["results"],

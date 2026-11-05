@@ -159,7 +159,19 @@
     // (when full, every other one is dropped and only every 2nd, then 4th... new state is kept). The first stays first.
     const stateMarks = {}, stateSeen = {}, stateStride = {};
     const STATE_KEEP = 48;
+    // Added Nov 4: per chart, whether a heatmap is drawn with every cell the same value in every state (counted on all
+    // states, before thinning): { value, shape } while flat, false once any heatmap varies. A grid whose size changes
+    // with the controls is not reported: there the size is the lesson (n x n pairs, all 1).
+    const flatHeat = {};
     const keepState = (id, r) => {
+      for (const m of r) {
+        if (!m || m.type !== 'heatmap' || flatHeat[id] === false) continue;
+        const vals = Array.isArray(m.values) ? m.values.flat().filter(Number.isFinite) : [];
+        if (vals.length < 2) continue;
+        const lo = Math.min(...vals), hi = Math.max(...vals), shape = `${m.values.length}x${vals.length}`;
+        if (hi - lo > 1e-9 * Math.max(1, Math.abs(hi)) || (flatHeat[id] && flatHeat[id].shape !== shape)) flatHeat[id] = false;
+        else if (!flatHeat[id]) flatHeat[id] = { value: lo, shape };
+      }
       const n = stateSeen[id] = (stateSeen[id] || 0) + 1, stride = stateStride[id] || 1;
       if ((n - 1) % stride) return;
       const list = stateMarks[id] || (stateMarks[id] = []);
@@ -525,7 +537,7 @@
     if (!anyViewChanged) err('no chart or readout ever changes when the controls are used');
     if (!errors.length) {
       facts = factsOf(comps, S0, lastMarks, stats);
-      layout = layoutProblems(views, stateMarks, { x: xReach, y: yReach }, growing);
+      layout = layoutProblems(views, stateMarks, { x: xReach, y: yReach }, growing, flatHeat);
       coverage = coverageProblems(spec, comps);
       checks = selfChecks(spec, comps, S0);
       const cov = coversOf(spec);
@@ -579,10 +591,13 @@
   // the same problem in another state: equal once numbers outside 'quoted names' are taken out
   const problemKey = (m) => m.split("'").map((p, i) => (i % 2 ? p : p.replace(/-?\d[\d.]*(?:e[-+]?\d+)?/g, '#'))).join("'");
 
-  function layoutProblems(views, stateMarks, reach, growing = new Set()) {
+  function layoutProblems(views, stateMarks, reach, growing = new Set(), flatHeat = {}) {
     const out = [];
     for (const c of views) {
       if (c.type !== 'chart') continue;
+      if (flatHeat[c.id] && out.length < 10) {
+        out.push(`${c.id}: every cell of the heatmap has the same value (${+flatHeat[c.id].value.toPrecision(3)}) at the start and after every control, so it shows no pattern; make the cell values come from the section's idea and change with the controls`);
+      }
       const states = stateMarks[c.id] && stateMarks[c.id].length ? stateMarks[c.id] : [[]];
       const keys = new Set(), mine = [];
       states.forEach((marks, i) => {

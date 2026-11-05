@@ -355,6 +355,121 @@
   ],
   "additionalProperties": false
  },
+ "targetsAsk": {
+  "type": "object",
+  "properties": {
+   "targets": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "part": {
+       "type": "string",
+       "enum": [
+        "widget",
+        "text",
+        "section",
+        "new-section",
+        "remove"
+       ]
+      },
+      "stage": {
+       "type": "string"
+      },
+      "after": {
+       "type": "string"
+      },
+      "what": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "part",
+      "stage",
+      "after",
+      "what"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "pageWide": {
+    "type": "boolean"
+   },
+   "question": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string"
+     },
+     "options": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "label": {
+         "type": "string"
+        },
+        "targets": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "part": {
+            "type": "string",
+            "enum": [
+             "widget",
+             "text",
+             "section",
+             "new-section",
+             "remove"
+            ]
+           },
+           "stage": {
+            "type": "string"
+           },
+           "after": {
+            "type": "string"
+           },
+           "what": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "part",
+           "stage",
+           "after",
+           "what"
+          ],
+          "additionalProperties": false
+         }
+        },
+        "pageWide": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "label",
+        "targets",
+        "pageWide"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "required": [
+     "text",
+     "options"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "required": [
+   "targets",
+   "pageWide",
+   "question"
+  ],
+  "additionalProperties": false
+ },
  "repair": {
   "type": "object",
   "additionalProperties": false,

@@ -12,9 +12,9 @@
 import { derivePalette } from "../../../shared/color";
 import { SAMPLE_DESIGN, SAMPLE_OUTLINE } from "../../../shared/sample";
 import { buildFollowUp } from "../../../shared/followup";
-import { LIMITS, formulaKey, isQuality, type ExplainerSpec, type FollowUp, type GenerateRequest, type ProgressStep, type RouteResponse } from "../../../shared/spec";
+import { LIMITS, PICK_MODES, formulaKey, isQuality, type ExplainerSpec, type FollowUp, type FollowUpPick, type GenerateRequest, type ProgressStep, type RouteResponse } from "../../../shared/spec";
 import { assembleSpec } from "../../../shared/validate";
-import { chat, ConnectionLost, formulaDeeper, generateExplainer, routeFollowUp, sectionTool, type FeedbackConfirmed } from "../api";
+import { chat, ConnectionLost, formulaDeeper, generateExplainer, pickFollowUp, routeFollowUp, sectionTool, type FeedbackConfirmed } from "../api";
 import { openFeedbackDialog } from "./feedback";
 import { allowance, onAuthChange, refreshAllowance, restore, type User } from "../auth";
 import { createChat } from "../render/chatbot";
@@ -23,13 +23,18 @@ import { inheritState, renderExplainer, storeFor, type DrawerState, type Progres
 import { exportHtml } from "../render/export";
 import { closeHistory, deleteRecord, fetchRecord, flushAll, flushRecord, getRecord, importLegacy, legacyRecords, openHistory, putRecord, type ExplainerRecord } from "../store/history";
 import { allowanceMeter, authView, legacyOffer, openAccountPanel } from "./account";
-import { createComposer, type ComposerSubmit } from "./composer";
+import { createComposer, type ComposerChoices, type ComposerEl, type ComposerSubmit } from "./composer";
 import { LEVEL_CHOICES } from "../../../shared/menus";
 import { createEditPanel, type EditTarget } from "./edit";
 import { openSearchPanel, sectionText } from "./section";
 import { applyMode, isDark, loadMode, modeToggle, setRootMode } from "./mode";
 import { extrasQuestion, extrasSummary } from "./extras";
 import type { Extra } from "../../../shared/menus";
+
+/** ✏️ Edit chat (per-part Edit buttons + the drawer's Edit tab). Hidden in every mode until version 2; the code stays. */
+const EDIT_CHAT = false;
+/** The Feedback button on an open explainer (feedback.ts, /api/feedback). Hidden in every mode for now; the code stays. */
+const FEEDBACK = false;
 
 const SUGGESTIONS = [
   { label: "Attention in transformers", text: "Explain self-attention in transformers: queries, keys, values and why it works." },
@@ -64,6 +69,9 @@ const ICON = {
   plus: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
   spark: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg>',
   dots: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+  retry: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
+  copy: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  check: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
 };
 
 const icon = (svg: string) => h("span", { "aria-hidden": "true", class: "icon", html: svg });
@@ -87,9 +95,11 @@ export class App {
   /** Follow-ups whose meaning (revise or new?) is still being worked out. */
   private routing = new Set<string>();
   /** The conversation's follow-up box, kept across re-renders so typed text survives progress updates. */
-  private dock: { root: string; el: HTMLElement } | null = null;
+  private dock: { root: string; el: HTMLElement; composer: ComposerEl } | null = null;
   /** The open "Add section" box, under the conversation's latest explainer. */
   private addBox?: { recId: string; el: HTMLElement };
+  /** The open Edit box or Retry confirm under a prompt. Kept across re-renders, so typed text survives progress updates. */
+  private promptBox?: { recId: string; kind: "edit" | "retry"; el: HTMLElement };
 
   private sidebar = h("aside.sidebar.shell", { "aria-label": "Explainer history" });
   private topbar = h("header.topbar.shell");
@@ -141,8 +151,13 @@ export class App {
       r.error = "This explainer was waiting for a design choice that no longer exists. Try again.";
       putRecord(r);
     }
+    // A follow-up interrupted while its sections were being picked: ask "change it or new?" again (a saved question stays).
+    for (const r of this.records.filter((r) => r.status === "picking" && !r.pick)) {
+      r.status = "deciding";
+      putRecord(r);
+    }
     // A retry that finished while no tab watched it: delete what it replaced, or bring that back if it failed.
-    for (const r of this.records.filter((r) => r.replaces && r.status !== "generating")) await this.settleRetry(r);
+    for (const r of this.records.filter((r) => r.replaces && (r.status === "done" || r.status === "error"))) await this.settleRetry(r);
     this.route();
     this.pollGenerating();
     this.offerLegacy();
@@ -181,7 +196,7 @@ export class App {
           this.records[i] = fresh;
           if (changed) this.refresh(fresh.id);
           if (fresh.status !== "generating") refreshAllowance().then(() => this.drawSidebar());
-          if (fresh.status !== "generating" && fresh.replaces) await this.settleRetry(fresh);
+          if ((fresh.status === "done" || fresh.status === "error") && fresh.replaces) await this.settleRetry(fresh);
         }
       }
     } finally {
@@ -253,7 +268,7 @@ export class App {
 
     this.sidebar.replaceChildren(
       h("div.sb-top", null,
-        h("a.brand-logo", { href: "#/" }, h("span.brand-mark", { "aria-hidden": "true" }, "✦"), "Explainer Studio"),
+        h("a.brand-logo", { href: "#/" }, h("span.brand-mark", { "aria-hidden": "true" }, "✦"), "ClariTale"),
         h("button.icon-btn", { type: "button", title: "Close sidebar", "aria-label": "Close sidebar", onclick: () => this.setSidebar(false) }, icon(ICON.sidebar))),
       h("a.sb-new", { href: "#/" }, icon(ICON.plus), "New explainer"),
       h("a.sb-link", { href: "#/demo", class: this.parts()[0] === "demo" ? "is-active" : "" }, icon(ICON.play), "Sample explainer"),
@@ -276,7 +291,7 @@ export class App {
     const href = lastDone && latest.status === "done" ? `#/c/${lastDone.id}/x` : `#/c/${latest.id}`;
     const status = thread.some((x) => x.status === "generating") ? h("span.sb-spinner", { "aria-label": "Generating" })
       : latest.status === "error" ? h("span.sb-err", { title: "Failed" }, "!")
-      : thread.some((x) => x.status === "deciding" || x.status === "asking") ? h("span.sb-ask", { title: "Waiting for your answer" }) : null;
+      : thread.some((x) => x.status === "deciding" || x.status === "asking" || (x.status === "picking" && x.pick)) ? h("span.sb-ask", { title: "Waiting for your answer" }) : null;
     const item = h("div.sb-item", { class: active ? "is-active" : "" },
       h("a.sb-item-link", { href, title: r.title }, status, h("span.sb-item-title", null, r.title)),
       h("button.sb-item-menu", { type: "button", "aria-label": `Options for ${r.title}`, "aria-expanded": String(this.menuOpen === r.id), onclick: (e: Event) => { e.stopPropagation(); this.menuOpen = this.menuOpen === r.id ? null : r.id; this.drawSidebar(); } }, icon(ICON.dots)));
@@ -327,12 +342,12 @@ export class App {
     const rec = kind === "c" ? this.records.find((r) => r.id === id) : undefined;
     // A conversation is named after its first explainer; an open explainer by its own title.
     const head = rec && x !== "x" ? this.records.find((r) => r.id === this.rootOf(rec)) : undefined;
-    const title = kind === "demo" ? "Sample explainer" : rec ? (head ?? rec).title : "Explainer Studio";
+    const title = kind === "demo" ? "Sample explainer" : rec ? (head ?? rec).title : "ClariTale";
     const actions: HTMLElement[] = [];
     if (rec?.spec && x === "x") {
       actions.push(h("a.tb-btn", { href: `#/c/${rec.id}` }, icon(ICON.request), "Request"));
       actions.push(h("button.tb-btn", { type: "button", onclick: () => this.doExport(rec.spec!) }, icon(ICON.download), "Export"));
-      actions.push(h("button.tb-btn", { type: "button", onclick: () => this.openFeedback(rec) }, icon(ICON.spark), "Feedback"));
+      if (FEEDBACK) actions.push(h("button.tb-btn", { type: "button", onclick: () => this.openFeedback(rec) }, icon(ICON.spark), "Feedback"));
     } else if (rec?.spec) {
       actions.push(h("a.tb-btn.is-primary", { href: `#/c/${rec.id}/x` }, "Open explainer", h("span", { "aria-hidden": "true" }, "→")));
     } else if (kind === "demo" && this.demoSpec) {
@@ -361,7 +376,7 @@ export class App {
     const composer = createComposer({ placeholder: "Describe an AI concept, e.g. “How does LoRA fine-tuning work?”", autofocus: true, onSubmit: (s) => this.submit(s) });
     const fill = (composer as HTMLElement & { fill(t: string): void }).fill;
     this.view.replaceChildren(h("div.home.shell", null,
-      h("div.home-eyebrow", null, h("span.brand-mark", { "aria-hidden": "true" }, "✦"), "Explainer Studio"),
+      h("div.home-eyebrow", null, h("span.brand-mark", { "aria-hidden": "true" }, "✦"), "ClariTale"),
       h("h1.home-title", null, "What do you want to ", h("em", null, "understand"), "?"),
       h("p.home-sub", null, "Describe an AI concept or attach a research paper. You'll get a page with sliders, live charts, quizzes and a tutor to ask."),
       composer,
@@ -376,8 +391,8 @@ export class App {
     const latest = thread.at(-1);
     // Keep the box (and anything typed in it) across the re-renders during generation.
     if (this.dock?.root !== root) {
-      const composer = createComposer({ placeholder: "Ask for changes, or a related topic…", onSubmit: (s) => this.submit(s, root) });
-      this.dock = { root, el: h("div.convo-dock", null, composer, h("p.dock-note", null, "Follow-ups continue this conversation: change the explainer above (a new version) or explain a related topic.")) };
+      const composer = createComposer({ placeholder: "Follow up…", onSubmit: (s) => this.submit(s, root) });
+      this.dock = { root, composer, el: h("div.convo-dock", null, composer, h("p.dock-note", null, "Follow-ups continue this conversation: change the explainer above (a new version) or explain a related topic.")) };
     }
     const list = h("div.thread", null, ...thread.flatMap((r) => this.turn(r, thread)));
     this.view.replaceChildren(h("div.convo.shell", null, list, this.dock.el));
@@ -399,9 +414,16 @@ export class App {
     if (rec.steps.improve) order.push("improve");
     if (rec.steps.notes) order.push("notes");
 
-    const userMsg = h("div.msg.is-user", { "data-rec": rec.id },
+    // Under the prompt: ↻ Retry, Copy, ✏️ Edit. Retry and Edit only on the conversation's last message, once it has
+    // finished or failed, so no later version is built on a page that goes away.
+    const canRedo = thread.at(-1) === rec && ((rec.status === "done" && !!rec.spec) || rec.status === "error");
+    if (this.promptBox?.recId === rec.id && !canRedo) this.promptBox = undefined;
+    const open = this.promptBox?.recId === rec.id ? this.promptBox : undefined;
+    const userMsg = h("div.msg.is-user", { "data-rec": rec.id, class: open?.kind === "edit" ? "is-editing" : undefined },
       rec.prompt.fileName ? h("div.msg-file", null, h("div.cmp-file-icon", null, "PDF"), h("div", null, h("div.cmp-file-name", null, rec.prompt.fileName), h("div.cmp-file-sub", null, `${rec.prompt.pages ?? "?"} pages`))) : null,
-      rec.prompt.text ? h("div.msg-bubble", null, rec.prompt.text) : null);
+      open?.kind === "edit" ? open.el : rec.prompt.text ? h("div.msg-bubble", null, rec.prompt.text) : null,
+      open?.kind === "edit" ? null : this.promptActions(rec, canRedo),
+      open?.kind === "retry" ? open.el : null);
 
     const steps = h("ol.steps", null, ...order.map((s) => {
       const st = rec.steps[s];
@@ -425,9 +447,19 @@ export class App {
             h("button.btn-pill", { type: "button", onclick: () => this.startFollowUp(rec, "new") }, "✨ New explainer about this")));
       }
     }
+    if (rec.status === "picking") {
+      const q = rec.pick?.question;
+      if (!q) body.push(h("p.msg-text.is-muted", null, "Finding the part of the page to change…"));
+      else {
+        body.push(h("p.msg-text", null, q.text),
+          h("div.msg-choices", null,
+            ...q.options.map((o) => h("button.btn-pill", { type: "button", onclick: () => this.answerPick(rec, { targets: o.targets, pageWide: o.pageWide }) }, o.label)),
+            h("button.btn-pill", { type: "button", onclick: () => this.cancelPick(rec) }, "Cancel")));
+      }
+    }
     if (rec.status === "asking") {
       body.push(h("p.msg-text", null, "What do you want to add to each section?"), extrasQuestion((ex) => this.answerExtras(rec, ex)));
-    } else if (isQuality(rec.request.quality) && rec.request.quality && rec.request.extras && rec.status !== "deciding") {
+    } else if (isQuality(rec.request.quality) && rec.request.quality && rec.request.extras && rec.status !== "deciding" && rec.status !== "picking") {
       body.push(h("p.msg-choice", null, extrasSummary(rec.request.extras)));
     }
     if (rec.followUp && rec.status !== "deciding") {
@@ -468,8 +500,6 @@ export class App {
       if (s.warnings.length) body.push(h("details.msg-warn", null, h("summary", null, `${s.warnings.length} part(s) were fixed or skipped automatically`), h("ul", null, ...s.warnings.map((w) => h("li", null, plain(w))))));
       // "Add section": only under the conversation's latest explainer, and only for Quality pages.
       if (isQuality(rec.request.quality) && this.followUpBase(this.rootOf(rec)) === rec && !thread.some((r) => r.status !== "done" && r.status !== "error")) body.push(this.addSectionBox(rec));
-      // "↻ Retry": only on the conversation's last message, so no later version is built on a page that goes away.
-      if (thread.at(-1) === rec) body.push(this.retryBox(rec));
     }
 
     return [userMsg, h("div.msg.is-assistant", null, h("div.msg-avatar", { "aria-hidden": "true" }, "✦"), h("div.msg-body", null, ...body))];
@@ -496,9 +526,8 @@ export class App {
       href: (sid) => (sid ? `#/c/${rec.id}/x/${encodeURIComponent(sid)}` : `#/c/${rec.id}/x`),
       onProgress: (p) => { rec.progress = p; putRecord(rec); },
       chat: chatEl,
-      edit: panel.el,
-      editing: panel.target() ?? undefined,
-      onEditBlock: (s, b) => this.openEdit(s, b),
+      // Edit chat is hidden for now (planned for version 2); set EDIT_CHAT to true to bring it back.
+      ...(EDIT_CHAT ? { edit: panel.el, editing: panel.target() ?? undefined, onEditBlock: (s: number, b: number) => this.openEdit(s, b) } : {}),
       onSectionTool: (i, _kind, button) => this.openSearch(rec, i, button),
       loadFormulaNote: async (i, b, signal) => {
         const st = spec.stages[i];
@@ -626,14 +655,12 @@ export class App {
   private async submit(s: ComposerSubmit, root?: string) {
     let request: GenerateRequest;
     let title: string;
-    // Code Lab 2.0 to 5.0 always say whether to think before planning (the Options' Thinking switch).
-    const thinking = s.quality === "code-lab-2" || s.quality === "code-lab-3" || s.quality === "code-lab-7" || s.quality === "playground" ? { planThinking: s.planThinking } : {};
     if (s.paper) {
-      request = { mode: "paper", title: s.paper.title, note: s.text, sections: s.paper.sections, ...modeOf(s), effort: s.effort, interactivity: s.interactivity, level: s.level, ...thinking, colorMode: s.colorMode };
+      request = { mode: "paper", title: s.paper.title, note: s.text, sections: s.paper.sections, ...optionsOf(s) };
       title = s.paper.title || s.paper.fileName;
     } else {
-      request = { mode: "concept", text: s.text, ...modeOf(s), effort: s.effort, interactivity: s.interactivity, level: s.level, ...thinking, colorMode: s.colorMode };
-      title = s.text.length > 60 ? s.text.slice(0, 57) + "…" : s.text;
+      request = { mode: "concept", text: s.text, ...optionsOf(s) };
+      title = clip(s.text);
     }
     // A follow-up continues from the conversation's latest finished explainer.
     const base = root ? this.followUpBase(root) : undefined;
@@ -723,6 +750,11 @@ export class App {
       rec.updatedAt = Date.now();
       putRecord(rec);
       this.refresh(rec.id);
+      return;
+    }
+    const f = rec.request.followUp;
+    if (kind === "revise" && f?.kind === "revise" && !f.pick && rec.request.quality && PICK_MODES.includes(rec.request.quality)) {
+      this.pickFirst(rec);
       return;
     }
     rec.status = "generating";
@@ -825,6 +857,67 @@ export class App {
     this.run(rec);
   }
 
+  /**
+   * A revise follow-up on a Playground or Quick read page: match the request to the page's sections first
+   * (server/explainer/followup_pick.py). Sure -> build with those parts; unclear -> ask the reader (rec.pick); can't
+   * tell -> an error, nothing built. If the call itself fails, the page is built anyway and the server's finder decides.
+   */
+  private async pickFirst(rec: ExplainerRecord) {
+    const f = rec.request.followUp;
+    if (f?.kind !== "revise" || !rec.request.quality) return;
+    rec.status = "picking";
+    rec.pick = undefined;
+    rec.updatedAt = Date.now();
+    putRecord(rec);
+    this.refresh(rec.id);
+    let r: Awaited<ReturnType<typeof pickFollowUp>> | null = null;
+    try {
+      r = await pickFollowUp({ text: rec.prompt.text, quality: rec.request.quality, followUp: f });
+    } catch (e) {
+      console.warn("follow-up pick failed; the server's finder decides", e);
+    }
+    if (rec.status !== "picking") return; // cancelled meanwhile
+    if (r && "question" in r) {
+      rec.pick = { question: r.question };
+      rec.updatedAt = Date.now();
+      putRecord(rec);
+      this.refresh(rec.id);
+      return;
+    }
+    if (r && "error" in r) {
+      rec.status = "error";
+      rec.error = r.error;
+      rec.updatedAt = Date.now();
+      putRecord(rec);
+      this.refresh(rec.id);
+      return;
+    }
+    this.answerPick(rec, r ? { targets: r.targets, pageWide: r.pageWide } : null);
+  }
+
+  /** Build the revision with the parts picked (or chosen by the reader); null = let the server's finder decide. */
+  private answerPick(rec: ExplainerRecord, pick: FollowUpPick | null) {
+    const f = rec.request.followUp;
+    if (rec.status !== "picking" || f?.kind !== "revise") return;
+    if (pick) rec.request = { ...rec.request, followUp: { ...f, pick } };
+    rec.pick = undefined;
+    rec.status = "generating";
+    rec.updatedAt = Date.now();
+    putRecord(rec);
+    this.refresh(rec.id);
+    this.run(rec);
+  }
+
+  private cancelPick(rec: ExplainerRecord) {
+    if (rec.status !== "picking") return;
+    rec.pick = undefined;
+    rec.status = "error";
+    rec.error = "Cancelled: nothing on the page was changed. Type what you'd like to change, or press Try again.";
+    rec.updatedAt = Date.now();
+    putRecord(rec);
+    this.refresh(rec.id);
+  }
+
   /** The answer to "What do you want to add to each section?": plan the explainer with it. */
   private answerExtras(rec: ExplainerRecord, extras: Extra[]) {
     if (rec.status !== "asking") return;
@@ -836,36 +929,134 @@ export class App {
     this.run(rec);
   }
 
-  /** "↻ Retry" with a confirm row: the old explainer can't be recovered once the fresh one is ready. */
-  private retryBox(rec: ExplainerRecord): HTMLElement {
-    const go = h("button.btn-pill.is-primary", { type: "button" }, "Retry") as HTMLButtonElement;
-    const ask = h("div.retry-confirm", { hidden: true },
-      h("p.dock-note", null, "This builds a fresh explainer on the same prompt and replaces this one. The old one can't be recovered."),
-      h("div.msg-choices", null, go, h("button.btn-pill", { type: "button", onclick: () => { ask.hidden = true; open.hidden = false; } }, "Cancel")));
-    const open = h("button.btn-pill", { type: "button", title: "Build a fresh explainer on the same prompt (replaces this one)", onclick: () => { ask.hidden = false; open.hidden = true; go.focus(); } }, "↻ Retry") as HTMLButtonElement;
-    go.addEventListener("click", () => { go.disabled = true; this.retryFresh(rec); });
-    return h("div.retry-box", null, open, ask);
+  /** The icon row under a prompt: ↻ Retry, Copy, ✏️ Edit (Retry and Edit only when `canRedo`). */
+  private promptActions(rec: ExplainerRecord, canRedo: boolean): HTMLElement | null {
+    const text = rec.prompt.text;
+    const act = (svg: string, label: string, onclick: (b: HTMLButtonElement) => void) => {
+      const b = h("button.msg-act", { type: "button", title: label, "aria-label": label }, icon(svg)) as HTMLButtonElement;
+      b.addEventListener("click", () => onclick(b));
+      return b;
+    };
+    const items: HTMLElement[] = [];
+    if (canRedo) {
+      items.push(act(ICON.retry, rec.status === "error" ? "Try again" : "Retry: a fresh explainer on the same prompt", () => {
+        if (rec.status === "error") { this.retry(rec); return; } // nothing to lose: run it again in place
+        this.openPromptBox(rec, "retry");
+      }));
+    }
+    if (text) {
+      items.push(act(ICON.copy, "Copy prompt", (b) => {
+        const done = () => {
+          b.replaceChildren(icon(ICON.check));
+          b.title = "Copied";
+          setTimeout(() => { b.replaceChildren(icon(ICON.copy)); b.title = "Copy prompt"; }, 1500);
+        };
+        if (copyNow(text)) done();
+        else if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => toast("Couldn't copy the prompt."));
+        else toast("Couldn't copy the prompt.");
+      }));
+    }
+    if (canRedo) items.push(act(ICON.pencil, "Edit prompt", () => this.openPromptBox(rec, "edit")));
+    return items.length ? h("div.msg-actions", null, ...items) : null;
+  }
+
+  /** Opens the Edit box or the Retry confirm under a prompt (one at a time). */
+  private openPromptBox(rec: ExplainerRecord, kind: "edit" | "retry") {
+    const close = () => { this.promptBox = undefined; this.refresh(rec.id); };
+    let el: HTMLElement;
+    if (kind === "retry") {
+      const go = h("button.btn-pill.is-primary", { type: "button" }, "Retry") as HTMLButtonElement;
+      go.addEventListener("click", () => { go.disabled = true; this.promptBox = undefined; this.retryFresh(rec); });
+      el = h("div.retry-confirm", null,
+        h("p.dock-note", null, "This builds a fresh explainer on the same prompt and replaces this one. The old one can't be recovered."),
+        h("div.msg-choices", null, go, h("button.btn-pill", { type: "button", onclick: close }, "Cancel")));
+    } else {
+      const paper = rec.request.mode === "paper";
+      const input = h("textarea.add-input", { rows: 3, maxlength: LIMITS.conceptChars, placeholder: paper ? "Anything to focus on? (optional)" : "Describe an AI concept" }) as HTMLTextAreaElement;
+      input.value = rec.prompt.text;
+      const send = h("button.btn-pill.is-primary", { type: "button" }, "Send") as HTMLButtonElement;
+      const go = () => {
+        const t = input.value.trim();
+        if (!t && !paper) { input.focus(); return; }
+        send.disabled = true;
+        this.promptBox = undefined;
+        this.editPrompt(rec, t);
+      };
+      send.addEventListener("click", go);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); }
+        else if (e.key === "Escape") close();
+      });
+      el = h("div.add-form.prompt-edit", null, input,
+        h("p.dock-note", null, (rec.status === "error" ? "Runs again with your edited prompt" : "Builds a fresh explainer from your edited prompt and replaces this one (the old one can't be recovered)")
+          + (rec.request.followUp?.kind === "revise" ? ", in this page's own mode." : ", using the mode and options selected below.")),
+        h("div.msg-choices", null, send, h("button.btn-pill", { type: "button", onclick: close }, "Cancel")));
+      queueMicrotask(() => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
+    }
+    this.promptBox = { recId: rec.id, kind, el };
+    this.refresh(rec.id);
+  }
+
+  /** ✏️ Edit: the same request with the edited prompt. A failed message runs again in place; a finished one is replaced like Retry. */
+  private editPrompt(rec: ExplainerRecord, text: string) {
+    if (rec.status === "error") {
+      const { request, ask } = this.editedRequest(rec.request, text);
+      rec.prompt = { ...rec.prompt, text };
+      rec.request = request;
+      if (!rec.thread && rec.request.mode === "concept") rec.title = clip(text);
+      if (ask) { // the mode changed to one that asks what to add to each section, like a new prompt
+        rec.status = "asking";
+        rec.error = undefined;
+        rec.steps = {};
+        rec.updatedAt = Date.now();
+        putRecord(rec);
+        this.refresh(rec.id);
+        return;
+      }
+      this.retry(rec); // a revise follow-up on Explorer / Reader matches the new text to sections first
+      return;
+    }
+    this.retryFresh(rec, text);
   }
 
   /**
-   * A fresh explainer from `old`'s request (same mode, options and prompt), told what `old` had so it takes another route.
-   * It is a new record; `old` stays hidden until it ends (settleRetry).
+   * An edited prompt behaves like a newly sent one: it uses the composer's current mode and options (v1 defaults for the
+   * hidden ones), not the old explainer's. A revise follow-up keeps its page's own mode, as typed follow-ups do. The answer
+   * to "what to add to each section" is kept when the mode is the same; a mode that asks it, newly chosen, asks again.
    */
-  private async retryFresh(old: ExplainerRecord) {
+  private editedRequest(req: GenerateRequest, text: string): { request: GenerateRequest; ask: boolean } {
+    const edited = withPromptText(req, text);
+    const choices = this.dock?.composer.choices?.();
+    if (!choices || edited.followUp?.kind === "revise") return { request: edited, ask: false };
+    const { quality, reviewRounds: _r, effort: _e, interactivity: _i, level: _l, planThinking: _t, colorMode: _c, extras, ...rest } = edited;
+    const opts = optionsOf(choices);
+    const keep = !!extras && quality === opts.quality;
+    return { request: { ...rest, ...opts, ...(keep ? { extras } : {}) } as GenerateRequest, ask: isQuality(opts.quality) && !keep };
+  }
+
+  /**
+   * A fresh run of `old`'s request (same mode, options and prompt), from scratch: nothing about `old` is sent.
+   * (Sending its section titles to avoid made each retry shorter, as the list grew with every retry.)
+   * It is a new record; `old` stays hidden until it ends (settleRetry). `text`: an edited prompt (✏️ Edit).
+   */
+  private async retryFresh(old: ExplainerRecord, text?: string) {
     if (!old.spec || this.replacerOf(old)) return;
-    const b = old.request;
-    const titles = [...old.spec.stages.map((st) => st.label), ...(b.avoid?.titles ?? [])].filter((t, i, a) => t && a.indexOf(t) === i).slice(0, 12);
-    const theme = old.spec.design.theme !== "custom" ? old.spec.design.theme : undefined;
-    const request: GenerateRequest = { ...b, avoid: { titles, ...(theme ? { theme } : {}) } };
+    const { avoid: _old, ...b } = old.request; // also drops an `avoid` saved by an earlier version of Retry
+    let request: GenerateRequest = { ...b };
     // A version made from Feedback is redone as an ordinary revision of the same request (its confirmed run was used up).
     if (request.followUp?.kind === "revise" && request.followUp.feedback) {
       const { feedback: _used, ...f } = request.followUp;
       request.followUp = f;
     }
+    // An edited prompt: the current mode and options (editedRequest); a revise follow-up's section pick is dropped, as it
+    // was made for the old text, so the server's finder decides again.
+    let ask = false;
+    if (text !== undefined) ({ request, ask } = this.editedRequest(request, text));
     const now = Date.now();
     const rec: ExplainerRecord = {
-      id: uid(), title: old.title, createdAt: now, updatedAt: now, prompt: { ...old.prompt }, request,
-      status: "generating", steps: {}, progress: { visited: [], answers: {} }, chat: [],
+      id: uid(), title: text !== undefined && !old.thread && request.mode === "concept" ? clip(text) : old.title, createdAt: now, updatedAt: now,
+      prompt: { ...old.prompt, ...(text !== undefined ? { text } : {}) }, request,
+      status: ask ? "asking" : "generating", steps: {}, progress: { visited: [], answers: {} }, chat: [],
       ...(old.thread ? { thread: old.thread } : {}), ...(old.followUp ? { followUp: old.followUp } : {}), ...(old.version ? { version: old.version } : {}),
       replaces: old.id,
     };
@@ -873,13 +1064,13 @@ export class App {
     this.records.unshift(rec);
     await putRecord(rec);
     location.hash = `#/c/${rec.id}`;
-    this.run(rec);
+    if (!ask) this.run(rec); // asking: runs once the reader answers (answerExtras)
   }
 
   /** A retry ended: done deletes the explainer it replaced; failed deletes the retry, and the old explainer comes back. */
   private async settleRetry(rec: ExplainerRecord) {
     const oldId = rec.replaces;
-    if (!oldId || rec.status === "generating") return;
+    if (!oldId || (rec.status !== "done" && rec.status !== "error")) return; // still building, or waiting on a question
     if (rec.status === "done") {
       try {
         await deleteRecord(oldId);
@@ -904,6 +1095,13 @@ export class App {
   }
 
   private retry(rec: ExplainerRecord) {
+    const f = rec.request.followUp;
+    if (f?.kind === "revise" && !f.pick && !f.feedback && !f.add && rec.request.quality && PICK_MODES.includes(rec.request.quality)) {
+      rec.error = undefined;
+      rec.steps = {};
+      this.pickFirst(rec); // match the request to sections again (it may ask the reader)
+      return;
+    }
     rec.status = "generating";
     rec.error = undefined;
     rec.steps = {};
@@ -1001,17 +1199,53 @@ function smartText(m: NonNullable<ExplainerSpec["smart"]>): string {
 }
 
 /** Review rounds (server/explainer/deepen.py): Interactive with rounds goes as quality-deep; other modes keep their own mode. */
-function modeOf(s: ComposerSubmit): Pick<GenerateRequest, "quality" | "reviewRounds"> {
+/** The request options for the composer's choices (mode, review rounds, effort, level, thinking, page colours). */
+function optionsOf(s: ComposerChoices): Pick<GenerateRequest, "quality" | "reviewRounds" | "effort" | "interactivity" | "level" | "planThinking" | "colorMode"> {
+  // Code Lab 2.0 to 7.0 and Explorer always say whether to think before planning (the Options' Thinking switch).
+  const thinking = s.quality === "code-lab-2" || s.quality === "code-lab-3" || s.quality === "code-lab-7" || s.quality === "playground" || s.quality === "playground-2" ? { planThinking: s.planThinking } : {};
+  return { ...modeOf(s), effort: s.effort, interactivity: s.interactivity, level: s.level, ...thinking, colorMode: s.colorMode };
+}
+
+function modeOf(s: ComposerChoices): Pick<GenerateRequest, "quality" | "reviewRounds"> {
   if (s.reviewRounds <= 0) return { quality: s.quality };
   return { quality: s.quality === "quality-plus" ? "quality-deep" : s.quality, reviewRounds: s.reviewRounds };
 }
 
 /** Mode names as the composer shows them (retired modes in old records keep a plain name). */
 const MODE_NAME: Record<string, string> = {
-  "quality-plus": "Interactive", "quality-deep": "Interactive", "lite-plus": "Quick read", "freeform-plus": "Creative", smart: "Smart", "scene-plus": "Lab", "code-lab": "Code Lab", "code-lab-2": "Code Lab 2.0", "code-lab-3": "Code Lab 3.0", "code-lab-4": "Code Lab 4.0", "code-lab-5": "Code Lab 5.0", "code-lab-6": "Code Lab 6.0", "code-lab-7": "Code Lab 7.0", playground: "Playground",
+  "quality-plus": "Interactive", "quality-deep": "Interactive", "lite-plus": "Reader", "freeform-plus": "Creative", smart: "Smart", "scene-plus": "Lab", "code-lab": "Code Lab", "code-lab-2": "Code Lab 2.0", "code-lab-3": "Code Lab 3.0", "code-lab-4": "Code Lab 4.0", "code-lab-5": "Code Lab 5.0", "code-lab-6": "Code Lab 6.0", "code-lab-7": "Code Lab 7.0", playground: "Explorer", "playground-2": "Explorer 2.0",
   quality: "Interactive", "quality-2": "Interactive", "quality-fixed": "Interactive", custom: "Interactive", lab: "Interactive",
   economy: "Interactive", cheap: "Interactive", "compact-plus": "Interactive", freeform: "Creative",
 };
+
+/** Copies `text` right away, inside the click (navigator.clipboard can wait on a permission prompt). False if the browser refused. */
+function copyNow(text: string): boolean {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+  document.body.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+/** A typed prompt as a conversation title. */
+function clip(text: string): string {
+  return text.length > 60 ? text.slice(0, 57) + "…" : text;
+}
+
+/** `req` with an edited prompt (a concept's text, a paper's note). A revise follow-up drops its section pick, made for the old text. */
+function withPromptText(req: GenerateRequest, text: string): GenerateRequest {
+  const out: GenerateRequest = req.mode === "concept" ? { ...req, text } : { ...req, note: text };
+  if (out.followUp?.kind === "revise" && out.followUp.pick) {
+    const { pick: _old, ...f } = out.followUp;
+    out.followUp = f;
+  }
+  return out;
+}
 
 /** The result card's settings line: "Interactive · low effort · hands-on · ≈ $0.006 · 47s". */
 function resultMeta(rec: ExplainerRecord): string {

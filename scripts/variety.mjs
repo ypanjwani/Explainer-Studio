@@ -52,7 +52,7 @@ async function generate(text, quality, effort) {
     body: JSON.stringify({ mode: "concept", text, quality, ...(effort ? { effort } : {}), ...(noThink ? { planThinking: false } : {}),
       ...(quality === "quality-deep" ? { debugVersions: true } : {}),
       // Code Lab: also the widgets Jev's review rejected (debugRejected; the app never sends it).
-      ...(quality.startsWith("code-lab") || quality === "playground" ? { debugRejected: true } : {}) }),
+      ...(quality.startsWith("code-lab") || quality.startsWith("playground") ? { debugRejected: true } : {}) }),
   });
   if (res.status === 401) { token = undefined; return generate(text, quality, effort); }
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -63,7 +63,7 @@ async function generate(text, quality, effort) {
   const done = events.find((e) => e.type === "done");
   if (!done) throw new Error("stream ended without a spec");
   const checks = events.filter((e) => e.type === "step" && /Checking numbers/.test(e.detail ?? "")).length;
-  return { spec: done.spec, usage: done.usage, checks, versions: done.versions, rejected: done.rejected, labMarks: done.labMarks, labMath: done.labMath };
+  return { spec: done.spec, usage: done.usage, checks, versions: done.versions, rejected: done.rejected, labMarks: done.labMarks, labMath: done.labMath, labBlueprint: done.labBlueprint };
 }
 
 const args = process.argv.slice(2);
@@ -82,8 +82,8 @@ let total = 0;
 for (const [n, topic] of list) {
   process.stdout.write(`\n#${n} [${name}] ${topic}\n`);
   try {
-    const { spec, usage, checks, versions, rejected, labMarks, labMath } = await generate(topic, quality, effort);
-    writeFileSync(`.variety/${name}-${n}.json`, JSON.stringify({ spec, usage, ...(rejected ? { rejected } : {}), ...(labMarks ? { labMarks } : {}), ...(labMath ? { labMath } : {}) }, null, 1));
+    const { spec, usage, checks, versions, rejected, labMarks, labMath, labBlueprint } = await generate(topic, quality, effort);
+    writeFileSync(`.variety/${name}-${n}.json`, JSON.stringify({ spec, usage, ...(rejected ? { rejected } : {}), ...(labMarks ? { labMarks } : {}), ...(labMath ? { labMath } : {}), ...(labBlueprint ? { labBlueprint } : {}) }, null, 1));
     if (labMath?.length) console.log(`  maths review: ${labMath.map((m) => `${m.section} ${m.outcome}${m.failed?.length ? ` (${m.failed.join(", ")})` : ""}${m.soft?.length ? ` soft: ${m.soft.join(", ")}` : ""}`).join("; ")}`);
     if (rejected?.length) console.log(`  rejected by the review (saved in the file): ${rejected.map((r) => `${r.section} [${r.kind}] "${r.title}"`).join("; ")}`);
     // Quality 2.0: each version with the findings and audit that led to it, as .variety/<name>-<n>-v<k>.json.

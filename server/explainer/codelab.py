@@ -67,7 +67,7 @@ from typing import Any, Callable
 
 import anthropic
 
-from . import data
+from . import data, pgpick
 from .core.spec import parse_outline
 from .core.validate import WIDGET_MAX_CHARS, without_blocks
 from .json_util import extract_json
@@ -147,8 +147,16 @@ PLANNER_NOTE_PG = PLANNER_NOTE + (
     "at most half of the stages and at most 4 on the page. Never mark an introduction, motivation, summary, recap or "
     "cheat-sheet stage. Every idea must show something no earlier interactive part on this page shows."
 )
+# Playground 2.0: the same note, plus the section's needs list, which Jev's pick reads (pgpick.questions asks which
+# part delivers each item). Written by the planner, so it costs no extra call.
+PLANNER_NOTE_PG2 = PLANNER_NOTE_PG + (
+    '\n\nWhen chart is true, also add "needs" to the interaction field: a list of up to 6 short items (each under 12 words, '
+    "in the section's own terms) naming what the reader should be able to change, read or compare there: each setting "
+    "it names, each number its formulas or worked example compute, each comparison, each extreme case, the structure it "
+    'describes. Leave out what belongs to other sections. "needs" is [] when chart is false.'
+)
 MAX_MARKED = 4
-MARK_KINDS = ("quantity", "process", "compare", "structure")
+MARK_KINDS =("quantity", "process", "compare", "structure")
 
 _STATIC_RULES = [
     (re.compile(r"\bfetch\s*\(|XMLHttpRequest|\bimport\s*\(|\bimportScripts\b|WebSocket|navigator\.sendBeacon"), "it uses the network"),
@@ -885,10 +893,11 @@ class CodeLabSettings:
     free: bool = False  # Code Lab 7.0: the builder gets Creative's freedom (CODE_LAB_FREE_SYSTEM)
     look: bool = False  # Code Lab 7.0: screenshots of each kept widget are judged by Haiku; problems get one repair (look_check)
     playground: bool = False  # Playground mode: each interactive part is a playground spec (_design_playground)
+    jev_pick: bool = False  # Playground 2.0: Jev picks the parts, code makes the blueprint, Haiku fills it (pgpick.py)
 
     @staticmethod
     def for_effort(effort: str, think: bool = True, slim: bool = False, full_vega: bool = False, free: bool = False,
-                   playground: bool = False) -> "CodeLabSettings":
+                   playground: bool = False, jev_pick: bool = False) -> "CodeLabSettings":
         """free=True is Code Lab 7.0: the writer's marks, fix-first review and repeat check, with every interactive part
         Haiku's own code (Code Lab's plan, build, repairs and backup) at the page's Effort, the builder free to design the
         widget its own way, like Creative (CODE_LAB_FREE_SYSTEM: kit optional, ~300 lines, no fixed-axis rule).
@@ -896,7 +905,7 @@ class CodeLabSettings:
         e = effort if effort in EFFORTS else "medium"
         if playground:
             return CodeLabSettings(plan=e, build=e, fix=e, vega=False, think=think, marks=True, fix_first=True, playground=True,
-                                   look=PG_LOOK)
+                                   look=PG_LOOK, jev_pick=jev_pick)
         if free:
             return CodeLabSettings(plan=e, build=e, fix=e, vega=False, think=think, marks=True, fix_first=True, free=True, look=True)
         return CodeLabSettings(plan=e, build=e, fix=e, vega=True, think=think, slim=slim or full_vega, full_vega=full_vega)
@@ -1403,6 +1412,8 @@ def read_mark(raw: Any) -> dict | None:
     out = {"chart": m["chart"], "idea": re.sub(r"\s+", " ", idea).strip()[:300]}
     if m.get("kind") in MARK_KINDS:  # Playground's note (PLANNER_NOTE_PG) also says what kind of part it is
         out["kind"] = m["kind"]
+    if m.get("needs"):  # Playground 2.0's note (PLANNER_NOTE_PG2): what the reader should change, read or compare
+        out["needs"] = pgpick.clean_needs(m["needs"])
     return out
 
 
@@ -1425,7 +1436,8 @@ def _gate_and_design(client: anthropic.Anthropic, usage: UsageLog, outline: dict
     if settings.marks and mark is not None:
         if not mark["chart"]:
             return _closed()
-        return _safe_design(client, usage, outline, si, {"open": True, "why": None, "hint": mark_hint(mark)}, jev_key, settings)
+        return _safe_design(client, usage, outline, si, {"open": True, "why": None, "hint": mark_hint(mark), "needs": mark.get("needs") or []},
+                            jev_key, settings)
     try:
         verdict, note = gate_one(jev_key, outline, si, usage, playground=settings.playground)
     except Exception:
@@ -1476,6 +1488,8 @@ def _place_all(outline: dict, targets: list[int], results: list[dict], notes: li
             stats.setdefault("math", []).append(res["math"])
         if res.get("look"):  # Code Lab 7.0: what the screenshots showed and whether the repair was used, for test runs
             stats.setdefault("look", []).append({"section": outline["stages"][si].get("label", ""), **res["look"]})
+        if res.get("blueprint"):  # Playground 2.0: Jev's picks and where the spec left them, for test runs
+            stats.setdefault("blueprint", []).append({**res["blueprint"], "built": bool(res.get("widget"))})
         if res.get("widget"):
             outline = _place(outline, si, res["widget"], res.get("after"))
             stats["built"] += 1
@@ -1588,7 +1602,8 @@ def _pg_ask(client: anthropic.Anthropic, usage: UsageLog, step: str, payload: di
             repair: dict | None = None, effort: str | None = None, edit: dict | None = None) -> Any:
     """One Haiku call: the section's playground spec (a first build, a repair or, with `edit`, a change the reader asked
     for to a finished playground: codelab_edit.py). None if the call failed or the reply has no JSON (the reason goes into `why`)."""
-    system = (data.prompt("PLAYGROUND_SYSTEM") + ("\n\n" + data.prompt("PLAYGROUND_REPAIR") if repair else "")
+    bp = payload.get("blueprint")  # Playground 2.0: Jev's picks, so Haiku fills them in (PLAYGROUND2_SYSTEM)
+    system = (data.prompt("PLAYGROUND2_SYSTEM" if bp else "PLAYGROUND_SYSTEM") + ("\n\n" + data.prompt("PLAYGROUND_REPAIR") if repair else "")
               + ("\n\n" + data.prompt("PLAYGROUND_EDIT") if edit else ""))
     user = {**payload, **(repair or {}), **(edit or {})}
     try:
@@ -1599,7 +1614,7 @@ def _pg_ask(client: anthropic.Anthropic, usage: UsageLog, step: str, payload: di
         log.exception("Playground: Haiku call failed (%s)", step)
         why.append(friendly_error(e))
         return None
-    return _keep_checks(spec, payload)
+    return pgpick.merge(_keep_checks(spec, payload), bp)
 
 
 def _no_playground(spec: Any) -> bool:
@@ -1894,6 +1909,29 @@ def _pg_accept(res: dict, spec: dict, plan: dict, scores: dict | None = None) ->
     return res
 
 
+def _pg_blueprint(jev_key: str | None, outline: dict, si: int, verdict: dict, usage: UsageLog, res: dict, label: str) -> dict | None:
+    """Playground 2.0: Jev picks the parts for this section and code makes the blueprint (pgpick). None (and a note) when
+    Jev gave no usable answer: the section is then built like Playground. res["blueprint"] keeps the picks for test runs."""
+    needs = pgpick.clean_needs(verdict.get("needs"))
+    answers = pgpick.pick(jev_key, outline, si, needs, usage)
+    bp = pgpick.blueprint(answers, needs)
+    res["blueprint"] = {"section": label, "needs": needs, "picked": pgpick.picked(bp) if bp else None,
+                        "optional": [o["tool"] for o in bp["optional"]] if bp else []}
+    if bp is None:
+        why = "Jev didn't answer" if answers is None else "Jev found no part that fits"
+        res["notes"].append(f"Playground 2.0 ({label}): {why}, so the playground was designed without a blueprint.")
+    return bp
+
+
+def _pg_done(res: dict, spec: dict, bp: dict | None) -> None:
+    """Playground 2.0: where the kept spec left the blueprint (test-run stats and the log)."""
+    if bp and res.get("blueprint") is not None:
+        dev = pgpick.deviations(spec, bp)
+        res["blueprint"]["deviations"] = dev
+        if dev:
+            log.info("Playground 2.0 (%s): spec left the blueprint: %s", res["blueprint"]["section"], dev)
+
+
 def _design_playground(client: anthropic.Anthropic, usage: UsageLog, outline: dict, si: int, verdict: dict, jev_key: str | None,
                        settings: CodeLabSettings) -> dict:
     """One section's playground: Haiku writes the spec, the checker dry-runs it (repairs with its errors), then Jev's
@@ -1904,6 +1942,9 @@ def _design_playground(client: anthropic.Anthropic, usage: UsageLog, outline: di
         return res
     why: list[str] = []
     payload = {**_section(outline, si), "hint": verdict.get("hint") or gate_hint(verdict.get("why")) or ""}
+    bp = _pg_blueprint(jev_key, outline, si, verdict, usage, res, label) if settings.jev_pick else None
+    if bp:
+        payload["blueprint"] = bp
     spec = _pg_ask(client, usage, "playground write", payload, settings, why)
     lower = _lower(settings.build)
     if spec is None and why and CUTOFF in why[-1] and lower:  # the whole budget went on thinking: once more, thinking less
@@ -1928,6 +1969,7 @@ def _design_playground(client: anthropic.Anthropic, usage: UsageLog, outline: di
     rv = review(jev_key, outline, si, plan, report.get("facts"), usage, fix_first=True, playground=True)
     if rv is None or not rv["reject"]:
         spec, plan = _pg_look(client, usage, payload, spec, plan, res, settings, why, label)
+        _pg_done(res, spec, bp)
         return _pg_accept(res, spec, plan, rv["p"] if rv else None)
     _rejected(res, label, "first", plan, playground_html(spec), rv["p"])
     scores = scores_text(rv["p"])
@@ -1941,6 +1983,7 @@ def _design_playground(client: anthropic.Anthropic, usage: UsageLog, outline: di
             again = review(jev_key, outline, si, plan2, report2.get("facts"), usage, full=False, playground=True)
             if again is None or not again["reject"]:
                 spec2, plan2 = _pg_look(client, usage, payload, spec2, plan2, res, settings, why, label)
+                _pg_done(res, spec2, bp)
                 return _pg_accept(res, spec2, plan2, again["p"] if again else rv["p"])
             _rejected(res, label, "fix", plan2, playground_html(spec2), again["p"])
     res["notes"].append(f"Playground ({label}): the reviewer rejected the playground and its fix didn't pass, so the section stays text. "

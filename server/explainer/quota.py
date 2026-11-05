@@ -119,7 +119,7 @@ def check_spend(settings: Settings, db: Database, user_id: str) -> None:
     spent = _global_usd(db)
     _warn_global(settings, spent)
     if spent >= settings.global_daily_usd:
-        raise ApiError(503, "Explainer Studio has reached today's capacity. Please try again tomorrow.", "capacity")
+        raise ApiError(503, "ClariTale has reached today's capacity. Please try again tomorrow.", "capacity")
 
 
 def remaining_usd(settings: Settings, db: Database, user_id: str) -> float:

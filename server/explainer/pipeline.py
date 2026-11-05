@@ -30,7 +30,7 @@ from . import data
 from .addsection import addition_request, parse_addition, place_detail, place_section
 from .chartpick import chart_on, experiments_to_charts
 from .codelab_edit import page_kind
-from .codelab import PLANNER_NOTE, PLANNER_NOTE_4, PLANNER_NOTE_PG, CodeLabSettings, Streamed, design_code_widgets, strip_prebuilt
+from .codelab import PLANNER_NOTE, PLANNER_NOTE_4, PLANNER_NOTE_PG, PLANNER_NOTE_PG2, CodeLabSettings, Streamed, design_code_widgets, strip_prebuilt
 from .scenes import design_scenes
 from .brief import ask_brief, brief_hint, brief_summary
 from .core.compact import parse_compact
@@ -51,7 +51,8 @@ from .filter import filter_sections
 from .paper_cache import paper_key
 from .revise import improve_request, parse_revision, restore_kept_widgets, revision_summary
 from . import feedback_check
-from .targets import apply_targets, clean_targets, find_targets
+from .targets import apply_targets, clean_targets, every_section, find_targets
+from .followup_pick import MODES as PICK_MODES
 from . import smart as smart_mode
 from .js import WS, is_finite, js_len, js_round, js_slice, js_str, js_trim, json_parse, json_stringify, round_num
 from .json_util import extract_json
@@ -468,7 +469,8 @@ def interactivity_hint(i: str | None) -> str:
 
 
 def avoid_hint(avoid: dict | None) -> str:
-    """Retry: the replaced page's section titles, so the planner writes a fresh take instead of the same page again."""
+    """Retry: the replaced page's section titles, so the planner writes a fresh take instead of the same page again.
+    Dormant since Nov 4 2026: the app no longer sends `avoid` (Retry runs from scratch; the growing list shrank pages)."""
     if not avoid or not avoid.get("titles"):
         return ""
     titles = "; ".join(f'"{t}"' for t in avoid["titles"])
@@ -529,7 +531,8 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
     # Code Lab 7.0 (code-lab-7): the writer marks which sections get an interactive part (PLANNER_NOTE_4), Haiku's own code
     # (plan, build, repairs, backup) designed freely like Creative's, and Jev checking the page for repeats.
     # Playground (playground): 7.0's marks and Jev checks, each part a playground spec (codelab._design_playground).
-    lab_mode = quality if quality in ("code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground") else None
+    # Playground 2.0 (playground-2): the same, but Jev picks each playground's parts and Haiku fills them in (pgpick.py).
+    lab_mode = quality if quality in ("code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground", "playground-2") else None
     code_lab = lab_mode is not None and not (req.get("followUp") and req["followUp"]["kind"] == "revise")  # a revision is a plain Quality+ revision
     if lab_mode:
         quality = "quality-plus"
@@ -549,14 +552,16 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
         usage.label(label, effort)
     lab_settings = (CodeLabSettings.for_effort(effort, think=req.get("planThinking", True), slim=lab_mode == "code-lab-3",
                                                full_vega=lab_mode == "code-lab-3",
-                                               free=lab_mode == "code-lab-7", playground=lab_mode == "playground")
-                    if lab_mode in ("code-lab-2", "code-lab-3", "code-lab-7", "playground") else CodeLabSettings())
+                                               free=lab_mode == "code-lab-7", playground=lab_mode in ("playground", "playground-2"),
+                                               jev_pick=lab_mode == "playground-2")
+                    if lab_mode in ("code-lab-2", "code-lab-3", "code-lab-7", "playground", "playground-2") else CodeLabSettings())
     freeform = quality == "freeform-plus"
     early_warnings: list[str] = []
     rejected: list[dict] = []  # Code Lab: widgets Jev's review rejected (returned for test runs only, debugRejected)
     lab_marks: dict = {}  # Code Lab 4.0: which sections the writer marked for a chart (test runs only, debugRejected)
     lab_math: list = []  # Code Lab 4.0: each chart's maths review (test runs only, debugRejected)
     lab_look: list = []  # Code Lab 7.0: each widget's look check (test runs only, debugRejected)
+    lab_blueprint: list = []  # Playground 2.0: Jev's picks per section and where the spec left them (test runs only)
     # A Quality+ revision replies with only its changes, merged into the previous outline (revise.py); Lite+ and
     # Freeform+ revisions (their own planners and formats) still write the whole outline.
     base_outline = None  # the previous version's outline (placeholders for its widgets), whatever the mode
@@ -689,6 +694,9 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
     # Feedback v2 (feedback.py): the parts the reader confirmed. They replace the finder, and a change that can't be matched
     # to the page is an error, never a silent whole-page rewrite. pageWide: the reader chose to change the whole page.
     fb = follow.get("feedback") if follow and follow["kind"] == "revise" else None
+    pick = follow.get("pick") if follow and follow["kind"] == "revise" and not fb else None
+    picked_page = follow is not None and follow["kind"] == "revise" and req.get("quality") in PICK_MODES  # Playground, Quick read
+    page_fields = False  # a change of the whole page made as targets: the title, key intuition and level may change too
     targetable = (base_outline is not None and follow and follow["kind"] == "revise" and not adding and not follow.get("add")
                   and not follow.get("improve") and not scenes and not smart)
     if fb and not fb["pageWide"] and not targetable:
@@ -702,6 +710,24 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
             raise ReaderError("This feedback couldn't be matched to the page, so nothing was changed. Send it again and pick the part you mean.")
         targeted = found["targets"]
         _step(emit, "plan", "running", "Changing " + (f"{len(targeted)} parts" if len(targeted) > 1 else "one part") + " of the page")
+    elif targetable and (pick or picked_page):
+        # Playground and Quick read pages (followup_pick.py): the parts the reader's request was matched to before this run
+        # (FollowUp.pick), or, from an older app, the finder now. A change of the whole page is a text change of every
+        # section, so these pages never take the whole-page path through the Interactive planner.
+        known = restore_kept_widgets(base_outline, follow["widgets"]) if follow.get("widgets") else base_outline
+        if pick:
+            found = clean_targets(pick, known)
+        else:
+            _step(emit, "plan", "running", "Deciding what to change")
+            found = find_targets(client, usage, known, req["text"])
+        if not found or not (found["targets"] or found["pageWide"]):
+            raise ReaderError("I couldn't tell which part of the page you mean, so nothing was changed. Name the section or the playground and try again.")
+        if found["pageWide"]:
+            targeted, page_fields = every_section(known, req["text"]), True
+            _step(emit, "plan", "running", f"Changing all {len(targeted)} sections")
+        else:
+            targeted = found["targets"]
+            _step(emit, "plan", "running", "Changing " + (f"{len(targeted)} parts" if len(targeted) > 1 else "one part") + " of the page")
     elif targetable and not fb:
         _step(emit, "plan", "running", "Deciding what to change")
         known = restore_kept_widgets(base_outline, follow["widgets"]) if follow.get("widgets") else base_outline
@@ -747,7 +773,7 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
     else:
         system = _prompt("LITE_SYSTEM") if lite else _prompt("OUTLINE_SYSTEM") if code_lab else planner_system(force_chart=scenes)
         # Code Lab: the planner is told in the user turn (the cached system prompt stays shared) to write prose only.
-        lab_note = PLANNER_NOTE_PG if lab_settings.playground else PLANNER_NOTE_4 if lab_settings.marks else PLANNER_NOTE
+        lab_note = PLANNER_NOTE_PG2 if lab_settings.jev_pick else PLANNER_NOTE_PG if lab_settings.playground else PLANNER_NOTE_4 if lab_settings.marks else PLANNER_NOTE
         plan_text = f"{request}\n\n{lab_note}" if code_lab else request
         streamed = None  # Code Lab, new page only: widgets start while the text streams
         if targeted:
@@ -758,7 +784,7 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
             def ask(text: str, parse: Callable[[Any], dict]) -> dict:
                 return write_outline(client, text, emit, usage, revise_system, parse, effort, whole="your reply")
             def run_targets(ts: list[dict]) -> dict:
-                return apply_targets(client, usage, jev_key, follow, base_outline, ts, req["text"], ask, effort, req.get("planThinking", True), req.get("quality"), prose)
+                return apply_targets(client, usage, jev_key, follow, base_outline, ts, req["text"], ask, effort, req.get("planThinking", True), req.get("quality"), prose, page_fields)
             r = run_targets(targeted)
             if fb:  # is each changed part better than before? (feedback_check.py)
                 _step(emit, "plan", "running", "Checking the changes")
@@ -776,7 +802,7 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
                               on_text=streamed.feed if streamed else None)
         outline, warnings, revision = r["outline"], r["warnings"], r.get("revision")
         # The brief's level wins over the planner's, so the page badge and the chatbot match it.
-        if brief and brief.get("level") and outline["level"] != brief["level"]:
+        if brief and brief.get("level") and not page_fields and outline["level"] != brief["level"]:
             outline = {**outline, "level": brief["level"]}
         # Lite+: strip any question, example or click-to-use block the planner wrote anyway.
         if lite:
@@ -798,6 +824,7 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
             lab_marks = cl.get("marks") or {}
             lab_math = cl.get("math") or []
             lab_look = cl.get("look") or []
+            lab_blueprint = cl.get("blueprint") or []
             _step(emit, "interaction", "done", f"{cl['built']} of {cl['sections']} sections got a " + ("playground" if lab_settings.playground else "custom interaction") + (f" · {cl['charts']} as charts" if cl.get("charts") else "") + (f" · {cl['repaired']} repaired" if cl["repaired"] else ""))
         if scenes:
             _step(emit, "interaction", "running")
@@ -884,4 +911,4 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
         _step(emit, "notes", "running")
         spec, detail = write_notes(client, spec, req.get("extras"), usage, kept=kept_notes)
         _step(emit, "notes", "done", detail)
-    return {"spec": spec, "usage": usage.summary(), **({"rejected": rejected} if rejected else {}), **({"labMarks": lab_marks} if lab_marks else {}), **({"labMath": lab_math} if lab_math else {}), **({"labLook": lab_look} if lab_look else {})}
+    return {"spec": spec, "usage": usage.summary(), **({"rejected": rejected} if rejected else {}), **({"labMarks": lab_marks} if lab_marks else {}), **({"labMath": lab_math} if lab_math else {}), **({"labLook": lab_look} if lab_look else {}), **({"labBlueprint": lab_blueprint} if lab_blueprint else {})}

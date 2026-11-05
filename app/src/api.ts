@@ -1,7 +1,7 @@
 // Calls to our server (never to Anthropic directly; the key lives server-side). Every call is signed in:
 // authFetch adds the access token and refreshes it when it runs out.
 
-import type { ChatRequest, EditRequest, EditResponse, FeedbackRun, FollowUp, FollowUpTarget, FormulaRequest, FormulaResponse, GenerateEvent, GenerateRequest, RouteRequest, RouteResponse, SectionRequest, SectionResponse } from "../../shared/spec";
+import type { ChatRequest, EditRequest, EditResponse, FeedbackRun, FollowUp, FollowUpTarget, FormulaRequest, FormulaResponse, GenerateEvent, GenerateRequest, PickRequest, PickResponse, RouteRequest, RouteResponse, SectionRequest, SectionResponse } from "../../shared/spec";
 import { apiJSON, authFetch, errorOf } from "./auth";
 
 /** POST JSON and read a text/event-stream response, calling onData per event. */
@@ -62,6 +62,9 @@ const postJSON = <T>(path: string, body: unknown, signal?: AbortSignal) => apiJS
 
 /** A follow-up in a conversation: does it revise the explainer above, or ask for a new one? */
 export const routeFollowUp = (req: RouteRequest, signal?: AbortSignal) => postJSON<RouteResponse>("/api/route", req, signal);
+
+/** A typed follow-up on a Playground or Quick read page: the sections it changes, or a question for the reader. */
+export const pickFollowUp = (req: PickRequest, signal?: AbortSignal) => postJSON<PickResponse>("/api/followup/pick", req, signal);
 
 /** One Edit chat turn: Haiku's reply and tool calls (the browser runs the tools). */
 export const editChat = (req: EditRequest, signal?: AbortSignal) => postJSON<EditResponse>("/api/edit", req, signal);

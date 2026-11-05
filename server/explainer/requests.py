@@ -21,7 +21,7 @@ def parse_generate(body: Any) -> dict | str:
     # lab, cheap, economy, compact-plus, and quality-2, merged into Quality+) run as Quality+, and plain
     # freeform as Freeform+.
     q = _get(body, "quality")
-    quality = "freeform-plus" if q in ("freeform", "freeform-plus") else q if q in ("lite-plus", "quality-deep", "smart", "scene-plus", "code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground") else "quality-plus"
+    quality = "freeform-plus" if q in ("freeform", "freeform-plus") else q if q in ("lite-plus", "quality-deep", "smart", "scene-plus", "code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground", "playground-2") else "quality-plus"
     opts: dict = {}
     effort = _get(body, "effort")
     if effort in ("low", "medium", "high"):  # absent = server default (PLAN_EFFORT or medium)
@@ -35,7 +35,7 @@ def parse_generate(body: Any) -> dict | str:
     # "What do you want to add to each section?" (Quality+ only): known keys, in menu order; "auto" can't be combined
     # with the others. An empty list is kept: it means None (no worked examples), unlike a missing field (not asked).
     extras = _get(body, "extras")
-    if quality in ("quality-plus", "quality-deep", "scene-plus", "code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground") and isinstance(extras, list):
+    if quality in ("quality-plus", "quality-deep", "scene-plus", "code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground", "playground-2") and isinstance(extras, list):
         picked = [k for k in data.menu("EXTRAS") if k in extras]
         opts["extras"] = ["auto"] if "auto" in picked else picked
     # Review rounds (the composer's Options): the most verify -> audit -> improve rounds (deepen.py). Absent or invalid =
@@ -47,7 +47,7 @@ def parse_generate(body: Any) -> dict | str:
         opts["reviewRounds"] = rounds
     # Code Lab 2.0, 3.0, 7.0 and Playground only: plan (and, in 2.0-3.0, repair and back up) charts with Haiku's thinking on (True) or off (False). Absent = on.
     think = _get(body, "planThinking")
-    if quality in ("code-lab-2", "code-lab-3", "code-lab-7", "playground") and isinstance(think, bool):
+    if quality in ("code-lab-2", "code-lab-3", "code-lab-7", "playground", "playground-2") and isinstance(think, bool):
         opts["planThinking"] = think
     # Page colours (the composer's Options): the page opens and exports in light or dark. Absent = follow the reader's setting.
     color = _get(body, "colorMode")
@@ -57,7 +57,7 @@ def parse_generate(body: Any) -> dict | str:
     if quality == "quality-deep" and _get(body, "debugVersions") is True:
         opts["debugVersions"] = True
     # Code Lab test runs (scripts/variety.mjs): the widgets Jev's review rejected, in the done event. The app never sends it.
-    if quality in ("code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground") and _get(body, "debugRejected") is True:
+    if quality in ("code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground", "playground-2") and _get(body, "debugRejected") is True:
         opts["debugRejected"] = True
     # Retry (the app's "↻ Retry"): what the explainer being replaced had, so the fresh one takes a different route.
     avoid = _parse_avoid(_get(body, "avoid"))

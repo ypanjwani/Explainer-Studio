@@ -676,11 +676,12 @@ export interface PaperSection { heading: string; text: string }
  * code-lab-5 ("Code Lab 5.0", beta): Code Lab 4.0's writer picks and repeat check, but each picked section's interactive part is Haiku's own code (no Vega), at the page's Effort.
  * code-lab-6 ("Code Lab 6.0", beta): a deeper page; the writer picks the sections and Haiku plans and builds each interactive part, with no widget test run, repairs or Jev review (only free static checks). Jev still fact-checks and clarity-checks the text.
  * code-lab-7 ("Code Lab 7.0", beta): Code Lab 5.0 with Creative's freedom for the builder: the plan fixes what each interactive part shows, Haiku designs how it looks (kit optional, ~300 lines); same checks, repairs and review.
- * playground ("Playground", beta): Code Lab 5.0's writer marks and Jev checks, but each marked section gets a playground spec (shared/playground, from the ai-playground experiment: fixed components plus short snippets, with dragging, clicking and play), dry-run by scripts/check-playground.mjs and repaired from its errors. */
-export type Quality = "quality-plus" | "quality-deep" | "freeform-plus" | "lite-plus" | "smart" | "scene-plus" | "code-lab" | "code-lab-2" | "code-lab-3" | "code-lab-4" | "code-lab-5" | "code-lab-6" | "code-lab-7" | "playground";
+ * playground ("Playground", beta): Code Lab 5.0's writer marks and Jev checks, but each marked section gets a playground spec (shared/playground, from the ai-playground experiment: fixed components plus short snippets, with dragging, clicking and play), dry-run by scripts/check-playground.mjs and repaired from its errors.
+ * playground-2 ("Playground 2.0", beta): Playground, but Jev picks each playground's parts (controls, charts, marks, diagram structures) and Haiku fills them in (server/explainer/pgpick.py). */
+export type Quality = "quality-plus" | "quality-deep" | "freeform-plus" | "lite-plus" | "smart" | "scene-plus" | "code-lab" | "code-lab-2" | "code-lab-3" | "code-lab-4" | "code-lab-5" | "code-lab-6" | "code-lab-7" | "playground" | "playground-2";
 
 /** Quality, Quality 2.0 and Lab share the page, the extras question and the Add section button. */
-export const isQuality = (q: Quality | undefined) => q === undefined || q === "quality-plus" || q === "quality-deep" || q === "scene-plus" || q === "code-lab" || q === "code-lab-2" || q === "code-lab-3" || q === "code-lab-4" || q === "code-lab-5" || q === "code-lab-6" || q === "code-lab-7" || q === "playground";
+export const isQuality = (q: Quality | undefined) => q === undefined || q === "quality-plus" || q === "quality-deep" || q === "scene-plus" || q === "code-lab" || q === "code-lab-2" || q === "code-lab-3" || q === "code-lab-4" || q === "code-lab-5" || q === "code-lab-6" || q === "code-lab-7" || q === "playground" || q === "playground-2";
 
 /**
  * Lite+: block types the planner is told not to write and code strips if it does: questions, and
@@ -692,10 +693,10 @@ export const LITE_DROPPED = new Set<string>(["quiz", "reveal", "predict", "examp
 export const CONTROL_TYPES = new Set<string>(["slider", "choice", "toggle", "presets"]);
 
 /** Modes where Jev first skips side-material sections of a PDF (server/explainer/filter.py). */
-export const filtersSections = (q: Quality | undefined) => q === "quality-plus" || q === "quality-deep" || q === "freeform-plus" || q === "lite-plus" || q === "smart" || q === "scene-plus" || q === "code-lab" || q === "code-lab-2" || q === "code-lab-3" || q === "code-lab-4" || q === "code-lab-5" || q === "code-lab-6" || q === "code-lab-7" || q === "playground";
+export const filtersSections = (q: Quality | undefined) => q === "quality-plus" || q === "quality-deep" || q === "freeform-plus" || q === "lite-plus" || q === "smart" || q === "scene-plus" || q === "code-lab" || q === "code-lab-2" || q === "code-lab-3" || q === "code-lab-4" || q === "code-lab-5" || q === "code-lab-6" || q === "code-lab-7" || q === "playground" || q === "playground-2";
 
 /** Modes where Jev answers the page brief (level, length, approach, look...) before the plan (server/explainer/brief.py). */
-export const usesBrief = (q: Quality | undefined) => q === "quality-plus" || q === "quality-deep" || q === "lite-plus" || q === "smart" || q === "scene-plus" || q === "code-lab" || q === "code-lab-2" || q === "code-lab-3" || q === "code-lab-4" || q === "code-lab-5" || q === "code-lab-6" || q === "code-lab-7" || q === "playground";
+export const usesBrief = (q: Quality | undefined) => q === "quality-plus" || q === "quality-deep" || q === "lite-plus" || q === "smart" || q === "scene-plus" || q === "code-lab" || q === "code-lab-2" || q === "code-lab-3" || q === "code-lab-4" || q === "code-lab-5" || q === "code-lab-6" || q === "code-lab-7" || q === "playground" || q === "playground-2";
 
 /** Thinking effort for planning and widget writing (composer toggle). High raises planning only; widgets are written at medium. */
 export type GenEffort = "low" | "medium" | "high";
@@ -712,8 +713,8 @@ export interface DesignPrefs { palette: ThemeName | "custom"; accent?: string; c
  * absent = none, except quality-deep, which then has 3). Interactive with rounds is sent as quality-deep.
  * planThinking: Code Lab 2.0, 3.0 and 4.0 only; false plans, repairs and backs up its charts with Haiku's thinking off (absent = on).
  * colorMode: the composer's Page colours; stamped as spec.design.mode, so the page opens and exports in it (absent = follow the reader).
- * avoid: "↻ Retry" only: the replaced explainer's section titles and theme, so the fresh one takes another route and looks new
- * (server/explainer/pipeline.py avoid_hint, other_theme; at most 12 titles of 120 characters).
+ * avoid: no longer sent (Nov 4 2026: "↻ Retry" now runs from scratch). Kept so requests saved by the old Retry still parse:
+ * the replaced explainer's section titles and theme (server/explainer/pipeline.py avoid_hint, other_theme; at most 12 titles).
  */
 interface RequestOptions { quality?: Quality; effort?: GenEffort; interactivity?: Interactivity; level?: LevelChoice; extras?: Extra[]; reviewRounds?: number; planThinking?: boolean; colorMode?: Exclude<ColorMode, "auto">; avoid?: { titles: string[]; theme?: ThemeName }; followUp?: FollowUp }
 
@@ -733,14 +734,29 @@ interface RequestOptions { quality?: Quality; effort?: GenEffort; interactivity?
 export interface FollowUpTarget { part: "widget" | "text" | "section" | "new-section"; stage: string; after: string; what: string }
 /** Feedback v2 (server/explainer/feedback.py): the change the reader confirmed. Only these parts change; pageWide = the whole page. */
 export interface FeedbackRun { id: string; targets: FollowUpTarget[]; keep: string[]; pageWide: boolean }
+/** A part a picked follow-up changes; "remove" drops a section (server/explainer/followup_pick.py). */
+export interface PickTarget { part: FollowUpTarget["part"] | "remove"; stage: string; after: string; what: string }
+/** The parts a typed follow-up on a Playground or Quick read page changes (POST /api/followup/pick, or the reader's answer to its question). pageWide: every section, and the title, key intuition and level may change too. */
+export interface FollowUpPick { targets: PickTarget[]; pageWide: boolean }
 
 export type FollowUp =
-  | { kind: "revise"; outline: string; design: Design; accent?: string; colorMode?: ColorMode; source?: string; kept?: KeptParts; widgets?: Record<string, Extract<Block, { type: "widget" }>[]>; add?: true; feedback?: FeedbackRun }
+  | { kind: "revise"; outline: string; design: Design; accent?: string; colorMode?: ColorMode; source?: string; kept?: KeptParts; widgets?: Record<string, Extract<Block, { type: "widget" }>[]>; add?: true; feedback?: FeedbackRun; pick?: FollowUpPick }
   | { kind: "new"; previous: string; source?: string };
 
 /** POST /api/route: does a follow-up change the explainer above, or ask for a new one? */
 export interface RouteRequest { text: string; title: string; stages: string[] }
 export interface RouteResponse { kind: "revise" | "new" | "unclear"; usd: number }
+
+/** Modes whose typed follow-ups are matched to sections first (POST /api/followup/pick); keep equal to followup_pick.MODES. */
+export const PICK_MODES: readonly Quality[] = ["playground", "lite-plus"];
+/** POST /api/followup/pick. followUp: the page as a revise follow-up. */
+export interface PickRequest { text: string; quality: Quality; followUp: Extract<FollowUp, { kind: "revise" }> }
+/** One reading of an unclear request; choosing it runs these parts. */
+export interface PickOption { label: string; targets: PickTarget[]; pageWide: boolean }
+export type PickResponse =
+  | ({ by: "jev" | "jev+haiku" | "haiku"; usd: number } & FollowUpPick)
+  | { question: { text: string; options: PickOption[] }; by: "jev+haiku" | "haiku"; usd: number }
+  | { error: string; usd: number };
 
 export type GenerateRequest =
   | ({ mode: "concept"; text: string } & RequestOptions)
