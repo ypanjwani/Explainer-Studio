@@ -2,24 +2,21 @@
 // home screen, a conversation view showing generation progress, and the
 // finished explainer opening full-width in the main area.
 //
-// Signed out, every route but the sample shows the sign-in screen (account.ts).
+// Signed out, every route shows the sign-in screen (account.ts).
 //
 // Routes: #/                 home
 //         #/c/<id>           conversation (request + progress + result card)
 //         #/c/<id>/x[/stage] the explainer
-//         #/demo[/stage]     sample explainer (no API call)
 
 import { derivePalette } from "../../../shared/color";
-import { SAMPLE_DESIGN, SAMPLE_OUTLINE } from "../../../shared/sample";
 import { buildFollowUp } from "../../../shared/followup";
 import { LIMITS, PICK_MODES, formulaKey, isQuality, type ExplainerSpec, type FollowUp, type FollowUpPick, type GenerateRequest, type ProgressStep, type RouteResponse } from "../../../shared/spec";
-import { assembleSpec } from "../../../shared/validate";
 import { chat, ConnectionLost, formulaDeeper, generateExplainer, pickFollowUp, routeFollowUp, sectionTool, type FeedbackConfirmed } from "../api";
 import { openFeedbackDialog } from "./feedback";
 import { allowance, onAuthChange, refreshAllowance, restore, type User } from "../auth";
 import { createChat } from "../render/chatbot";
 import { h, uid } from "../render/dom";
-import { inheritState, renderExplainer, storeFor, type DrawerState, type Progress } from "../render/explainer";
+import { inheritState, renderExplainer, storeFor, type DrawerState } from "../render/explainer";
 import { exportHtml } from "../render/export";
 import { closeHistory, deleteRecord, fetchRecord, flushAll, flushRecord, getRecord, importLegacy, legacyRecords, openHistory, putRecord, type ExplainerRecord } from "../store/history";
 import { allowanceMeter, authView, legacyOffer, openAccountPanel } from "./account";
@@ -85,8 +82,6 @@ export class App {
   private polling = false;
   private running = new Map<string, AbortController>();
   private disposeView: (() => void) | null = null;
-  private demoSpec: ExplainerSpec | null = null;
-  private demoProgress: Progress = { visited: [], answers: {} };
   private menuOpen: string | null = null;
   /** Edit chat for the open explainer: its panel and in-memory undo history. */
   private edit: { recId: string; panel: ReturnType<typeof createEditPanel>; undo: ExplainerSpec[] } | null = null;
@@ -216,12 +211,11 @@ export class App {
     this.disposeView?.();
     this.disposeView = null;
     const [kind, id, x, stage] = this.parts();
-    this.root.classList.toggle("in-explainer", (kind === "c" && x === "x") || kind === "demo");
-    this.root.classList.toggle("signed-out", !this.user && kind !== "demo");
+    this.root.classList.toggle("in-explainer", kind === "c" && x === "x");
+    this.root.classList.toggle("signed-out", !this.user);
     if (window.matchMedia("(max-width: 800px)").matches) this.setSidebar(false);
 
-    if (kind === "demo") this.showDemo(id);
-    else if (!this.user) this.view.replaceChildren(authView({ onDone: () => { if (location.hash !== "#/") location.hash = "#/"; } }));
+    if (!this.user) this.view.replaceChildren(authView({ onDone: () => { if (location.hash !== "#/") location.hash = "#/"; } }));
     else if (kind === "c" && id) {
       const rec = this.records.find((r) => r.id === id) ?? (await getRecord(id));
       if (!rec) { location.hash = "#/"; return; }
@@ -273,7 +267,6 @@ export class App {
         h("a.brand-logo", { href: "#/" }, h("span.brand-mark", { "aria-hidden": "true" }, "✦"), "ClariTale"),
         h("button.icon-btn", { type: "button", title: "Close sidebar", "aria-label": "Close sidebar", onclick: () => this.setSidebar(false) }, icon(ICON.sidebar))),
       h("a.sb-new", { href: "#/" }, icon(ICON.plus), "New explainer"),
-      h("a.sb-link", { href: "#/demo", class: this.parts()[0] === "demo" ? "is-active" : "" }, icon(ICON.play), "Sample explainer"),
       list,
       h("div.sb-bottom", null,
         this.user ? allowanceMeter(allowance()) : null,
@@ -344,7 +337,7 @@ export class App {
     const rec = kind === "c" ? this.records.find((r) => r.id === id) : undefined;
     // A conversation is named after its first explainer; an open explainer by its own title.
     const head = rec && x !== "x" ? this.records.find((r) => r.id === this.rootOf(rec)) : undefined;
-    const title = kind === "demo" ? "Sample explainer" : rec ? (head ?? rec).title : "ClariTale";
+    const title = rec ?(head ?? rec).title : "ClariTale";
     const actions: HTMLElement[] = [];
     if (rec?.spec && x === "x") {
       actions.push(h("a.tb-btn", { href: `#/c/${rec.id}` }, icon(ICON.request), "Request"));
@@ -352,8 +345,6 @@ export class App {
       if (FEEDBACK) actions.push(h("button.tb-btn", { type: "button", onclick: () => this.openFeedback(rec) }, icon(ICON.spark), "Feedback"));
     } else if (rec?.spec) {
       actions.push(h("a.tb-btn.is-primary", { href: `#/c/${rec.id}/x` }, "Open explainer", h("span", { "aria-hidden": "true" }, "→")));
-    } else if (kind === "demo" && this.demoSpec) {
-      actions.push(h("button.tb-btn", { type: "button", onclick: () => this.doExport(this.demoSpec!) }, icon(ICON.download), "Export"));
     }
     this.topbar.replaceChildren(
       h("button.icon-btn.tb-toggle", { type: "button", title: "Open sidebar", "aria-label": "Open sidebar", onclick: () => this.setSidebar(true) }, icon(ICON.sidebar)),
@@ -637,18 +628,6 @@ export class App {
       value: (name: string) => storeFor(rec.spec!)?.get(name) ?? NaN,
       highlight,
     };
-  }
-
-  private showDemo(stage?: string) {
-    this.demoSpec ??= assembleSpec(SAMPLE_OUTLINE, SAMPLE_DESIGN, "Sample explainer about how language models pick the next word.");
-    this.disposeView = renderExplainer(this.view, {
-      spec: this.demoSpec,
-      progress: this.demoProgress,
-      stageId: stage,
-      href: (sid) => (sid ? `#/demo/${sid}` : "#/demo"),
-      onProgress: (p) => { this.demoProgress = p; },
-    });
-    this.view.scrollTo({ top: 0 });
   }
 
   // ---------- generation ----------

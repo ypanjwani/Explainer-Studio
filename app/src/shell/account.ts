@@ -157,11 +157,7 @@ export function authView(opts: { onDone: () => void; mode?: "login" | "register"
       h("div.auth-center", null,
         h("div.auth-box", null,
           h("div.auth-mobile-logo", null, logo()),
-          seg, head, form,
-          h("div.auth-or", null, "or"),
-          h("a.auth-demo", { href: "#/demo" },
-            h("span", null, h("strong", null, "See a sample explainer first"), h("small", null, "No account needed. Takes 30 seconds.")),
-            h("span.auth-demo-arrow", { "aria-hidden": "true", html: ARROW })))),
+          seg, head, form)),
       h("p.auth-legal", null, "AI topics only · Pages are made by AI and checked by code, but can still be wrong.")));
 }
 
