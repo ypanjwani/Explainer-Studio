@@ -1,7 +1,7 @@
 """The database: SQLAlchemy models and sessions. Postgres in production, SQLite in development and tests.
 
 Tables:
-  users           an account (email + bcrypt hash); token_version invalidates every access token at once
+  users           an account (email; a bcrypt hash for password accounts, google_sub for Google ones); token_version invalidates every access token at once
   refresh_tokens  one row per refresh cookie, stored as a SHA-256 hash; rotated on every use (family_id links a chain)
   explainers      the reader's history: one row per ExplainerRecord, the whole record as JSON (the browser's shape)
   generations     what the server knows about a running or finished generation, so a reload can pick it up
@@ -42,7 +42,10 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)  # normalized: trimmed, lower-case
-    password_hash: Mapped[str] = mapped_column(String(100))
+    password_hash: Mapped[str | None] = mapped_column(String(100), nullable=True)  # None: a Google-only account
+    # Google's stable account id ("sub"); the email can change on Google's side, this never does.
+    google_sub: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
+    email_verified_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # set when Google vouches for it
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     plan: Mapped[str] = mapped_column(String(20), default="free")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

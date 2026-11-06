@@ -20,8 +20,11 @@ def app(monkeypatch):
     monkeypatch.setenv("RATELIMIT_STORAGE_URI", "memory://")
     # Never read the developer's .env: a deleted variable would be loaded back from it, real Jev key included (audit F29).
     monkeypatch.setenv("EXPLAINER_NO_DOTENV", "1")
+    monkeypatch.setenv("PASSWORD_AUTH", "1")  # tests make accounts with the (switched-off) password routes; see test_google_auth
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-google-secret")
     for name in ("JEV_API_KEY", "ENV", "FREE_DAILY_GENERATIONS", "FREE_DAILY_USD", "GLOBAL_DAILY_USD", "TRUST_PROXY",
-                 "TRUST_PROXY_HOPS", "ALLOW_HIDDEN_MODES", "ALLOW_DEBUG"):
+                 "TRUST_PROXY_HOPS", "ALLOW_HIDDEN_MODES", "ALLOW_DEBUG", "GOOGLE_REDIRECT_URI"):
         monkeypatch.delenv(name, raising=False)
     return create_app()
 

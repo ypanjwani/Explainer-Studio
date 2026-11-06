@@ -66,8 +66,6 @@ async function sessionCall(path: string, body: unknown, method = "POST"): Promis
   return s;
 }
 
-export const register = (email: string, password: string) => sessionCall("/api/auth/register", { email, password });
-export const login = (email: string, password: string) => sessionCall("/api/auth/login", { email, password });
 
 /** A new access token from the refresh cookie (one request at a time, however many calls ask). Null = signed out. */
 export function refresh(): Promise<Session | null> {
@@ -157,14 +155,9 @@ export async function logoutEverywhere(): Promise<void> {
   }
 }
 
-export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
-  const res = await authFetch("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword, newPassword }) });
-  if (!res.ok) throw await errorOf(res);
-  set((await res.json()) as Session);
-}
-
-export async function deleteAccount(password: string): Promise<void> {
-  await apiJSON("/api/auth/me", "DELETE", { password });
+/** Deleting is confirmed by typing the account's email (the server checks it). */
+export async function deleteAccount(email: string): Promise<void> {
+  await apiJSON("/api/auth/me", "DELETE", { email });
   set(null);
 }
 

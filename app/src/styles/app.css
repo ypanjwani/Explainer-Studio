@@ -516,6 +516,13 @@ a { color: inherit; }
 .auth-submit .icon { transition: transform 0.2s; }
 .auth-submit:hover .icon { transform: translateX(3px); }
 .auth-spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 0.7s linear infinite; }
+.auth-google { text-decoration: none; box-sizing: border-box; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); }
+.auth-google:hover { background: var(--surface-2); color: var(--text); border-color: color-mix(in srgb, var(--text) 30%, var(--border-strong)); }
+.auth-google:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 18%, transparent); }
+.auth-google.is-busy { pointer-events: none; opacity: 0.75; }
+.auth-google-g { display: inline-flex; }
+.auth-google-note { margin: 0; text-align: center; }
+.auth-legal a { color: inherit; }
 .auth-link { border: 0; background: transparent; font: inherit; padding: 0; color: inherit; text-decoration: underline; font-weight: 600; cursor: pointer; }
 .auth-legal { text-align: center; color: var(--muted); font-size: 0.78rem; margin: 0; line-height: 1.5; }
 

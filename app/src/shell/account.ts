@@ -1,22 +1,11 @@
-// Accounts in the app shell: the sign-in / create-account screen, the account panel (today's free
-// allowance, password, sign out, delete account) and the offer to import pre-account history.
+// Accounts in the app shell: the sign-in screen ("Continue with Google", the only way in), the account panel
+// (today's free allowance, sign out, delete account) and the offer to import pre-account history.
 
-import { ApiError, allowance, changePassword, currentUser, deleteAccount, login, logout, logoutEverywhere, refreshAllowance, register, type Allowance } from "../auth";
+import { allowance, currentUser, deleteAccount, logout, logoutEverywhere, refreshAllowance, type Allowance } from "../auth";
 import { deletePreference, listPreferences, setPreferenceStatus, type Preference } from "../api";
 import { h } from "../render/dom";
 import { temperatureDemo } from "./authDemo";
 import { modeButton } from "./mode";
-
-const PASSWORD_MIN = 8;
-const PASSWORD_MAX_BYTES = 72;
-
-/** Problems the server would refuse anyway, caught before sending. */
-function checkPassword(pw: string): string | null {
-  if (pw.length < PASSWORD_MIN) return `Use at least ${PASSWORD_MIN} characters.`;
-  if (new TextEncoder().encode(pw).length > PASSWORD_MAX_BYTES) return `Use at most ${PASSWORD_MAX_BYTES} bytes (about ${PASSWORD_MAX_BYTES} plain letters).`;
-  if (!pw.trim()) return "The password can't be only spaces.";
-  return null;
-}
 
 function field(label: string, input: HTMLInputElement, control: HTMLElement = input): { el: HTMLElement; error: (msg: string | null) => void } {
   const id = `f-${Math.random().toString(36).slice(2, 8)}`;
@@ -29,119 +18,56 @@ function field(label: string, input: HTMLInputElement, control: HTMLElement = in
   };
 }
 
-function passwordInput(autocomplete: string): HTMLElement & { input: HTMLInputElement } {
-  const input = h("input.auth-input", { type: "password", autocomplete, required: true, maxlength: 200 }) as HTMLInputElement;
-  const toggle = h("button.auth-show", { type: "button", "aria-label": "Show password", "aria-pressed": "false" }, "Show");
-  toggle.addEventListener("click", () => {
-    const show = input.type === "password";
-    input.type = show ? "text" : "password";
-    toggle.textContent = show ? "Hide" : "Show";
-    toggle.setAttribute("aria-pressed", String(show));
-    toggle.setAttribute("aria-label", show ? "Hide password" : "Show password");
-  });
-  return Object.assign(h("div.auth-pw", null, input, toggle), { input });
-}
-
-const ARROW = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
 const CHECK = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
 
-/** Four bars and a word under a new password: length first, then a mix of character kinds. */
-function strengthMeter(input: HTMLInputElement) {
-  const bars = [0, 1, 2, 3].map(() => h("i"));
-  const text = h("div.auth-strength-text");
-  const el = h("div.auth-strength", { "aria-live": "polite" }, h("div.auth-strength-bars", { "aria-hidden": "true" }, ...bars), text);
-  const draw = () => {
-    const v = input.value;
-    let s = 0;
-    if (v.length >= PASSWORD_MIN) {
-      s = 1;
-      if (v.length >= 12) s++;
-      if (/[a-z]/.test(v) && /[A-Z]/.test(v)) s++;
-      if (/\d/.test(v) && /[^A-Za-z0-9]/.test(v)) s++;
-    }
-    const level = v ? Math.max(s, 1) : 0;
-    el.dataset.level = String(v.length < PASSWORD_MIN && v ? 0 : level);
-    bars.forEach((b, i) => b.classList.toggle("on", i < level));
-    const left = PASSWORD_MIN - v.length;
-    text.textContent = !v ? `At least ${PASSWORD_MIN} characters.`
-      : left > 0 ? `${left} more character${left === 1 ? "" : "s"} to go.`
-      : ["Okay.", "Okay.", "Good.", "Strong.", "Very strong."][s];
-  };
-  input.addEventListener("input", draw);
-  draw();
-  return { el, draw };
+const GOOGLE_G = '<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>';
+
+/** What the server's /?auth_error=<code> means (routes/auth.py google_callback). */
+const AUTH_ERRORS: Record<string, string> = {
+  cancelled: "Google sign-in was cancelled. Try again when you're ready.",
+  state: "That sign-in link expired or came from another tab. Please try again.",
+  not_verified: "Google hasn't verified this account's email address, so we can't use it. Try another Google account.",
+  network_limit: "Too many new accounts were made from this network today. Please try again tomorrow.",
+  rate_limited: "Too many sign-in attempts from this network. Please wait a while and try again.",
+  inactive: "This Google account can't be used to sign in here.",
+  unavailable: "Google sign-in isn't available right now. Please try again later.",
+  google: "Google sign-in didn't work. Please try again.",
+};
+
+/** The error the Google sign-in sent back in the address, once: it is removed from the address at once. */
+function takeAuthError(): string | null {
+  const params = new URLSearchParams(location.search);
+  const code = params.get("auth_error");
+  if (code === null) return null;
+  params.delete("auth_error");
+  const rest = params.toString();
+  history.replaceState(history.state, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
+  return AUTH_ERRORS[code] ?? AUTH_ERRORS.google;
 }
 
-/** The signed-out screen: a brand panel with a live example, and the sign-in / sign-up form. onDone runs after success. */
-export function authView(opts: { onDone: () => void; mode?: "login" | "register" }): HTMLElement {
-  let mode = opts.mode ?? "login";
-  const copy = {
-    login: { title: "Welcome back", sub: "Sign in to make explainers and pick up where you left off.", btn: "Sign in", busy: "Signing in…", ph: "Your password" },
-    register: { title: "Create your free account", sub: "Turn any AI concept or research paper into a page you can play with.", btn: "Create account", busy: "Creating account…", ph: `At least ${PASSWORD_MIN} characters` },
-  };
-  const email = h("input.auth-input", { type: "email", autocomplete: "email", required: true, maxlength: 320, inputmode: "email", placeholder: "you@example.com" }) as HTMLInputElement;
-  const pw = passwordInput("current-password");
-  const emailF = field("Email", email);
-  const pwF = field("Password", pw.input, pw);
-  const meter = strengthMeter(pw.input);
-  pwF.el.insertBefore(meter.el, pwF.el.lastChild);
+/**
+ * The signed-out screen: a brand panel with a live example, and "Continue with Google", the only way to sign in
+ * or make an account (password sign-in was removed Nov 5 2026; old password accounts sign in with Google under
+ * the same email). The trip to Google and back reloads the page, which then restores the session.
+ */
+export function authView(): HTMLElement {
   const formError = h("div.auth-error", { role: "alert" });
-  const submit = h("button.auth-submit", { type: "submit" }) as HTMLButtonElement;
-  const idle = () => submit.replaceChildren(h("span", null, copy[mode].btn), h("span.icon", { "aria-hidden": "true", html: ARROW }));
-  const title = h("h1.auth-title");
-  const sub = h("p.auth-sub");
-  const head = h("div.auth-head", null, title, sub);
-  const tabs = (["login", "register"] as const).map((m) =>
-    h("button", { type: "button", role: "tab", onclick: () => { mode = m; draw(); email.focus(); } }, m === "login" ? "Sign in" : "Create account"));
-  const seg = h("div.auth-seg", { role: "tablist", "aria-label": "Sign in or create an account" }, h("span.auth-seg-pill", { "aria-hidden": "true" }), ...tabs);
+  const googleError = takeAuthError();
+  if (googleError) formError.textContent = googleError;
 
-  const draw = () => {
-    const c = copy[mode];
-    seg.dataset.mode = mode;
-    tabs.forEach((t, i) => t.setAttribute("aria-selected", String((i === 0) === (mode === "login"))));
-    title.textContent = c.title;
-    sub.textContent = c.sub;
-    pw.input.placeholder = c.ph;
-    pw.input.autocomplete = mode === "login" ? "current-password" : "new-password";
-    meter.el.hidden = mode !== "register";
-    meter.draw();
-    idle();
-    head.classList.remove("is-in"); void head.offsetWidth; head.classList.add("is-in");
-    emailF.error(null); pwF.error(null); formError.textContent = "";
-  };
-
-  const form = h("form.auth-form", { novalidate: true }, formError, emailF.el, pwF.el, submit) as HTMLFormElement;
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    emailF.error(null); pwF.error(null); formError.textContent = "";
-    const addr = email.value.trim();
-    let bad = false;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr)) { emailF.error("Enter a valid email address."); bad = true; }
-    const pwProblem = mode === "register" ? checkPassword(pw.input.value) : pw.input.value ? null : "Enter your password.";
-    if (pwProblem) { pwF.error(pwProblem); bad = true; }
-    if (bad) { (form.querySelector("[aria-invalid=true]") as HTMLElement | null)?.focus(); return; }
-    submit.disabled = true;
-    submit.replaceChildren(h("span.auth-spinner", { "aria-hidden": "true" }), h("span", null, copy[mode].busy));
-    try {
-      await (mode === "login" ? login(addr, pw.input.value) : register(addr, pw.input.value));
-      opts.onDone();
-    } catch (err) {
-      if (err instanceof ApiError && err.fields) {
-        if (err.fields.email) emailF.error(err.fields.email);
-        if (err.fields.password) pwF.error(err.fields.password);
-      }
-      formError.textContent = err instanceof Error ? err.message : String(err);
-      if (err instanceof ApiError && err.code === "email_taken") {
-        formError.append(" ", h("button.auth-link", { type: "button", onclick: () => { mode = "login"; draw(); pw.input.focus(); } }, "Sign in instead"));
-      }
-    } finally {
-      submit.disabled = false;
-      idle();
-    }
+  const google = h("a.auth-submit.auth-google", { href: "/api/auth/google/start" },
+    h("span.auth-google-g", { html: GOOGLE_G }), h("span", null, "Continue with Google")) as HTMLAnchorElement;
+  // A full-page trip to Google and back; the button shows it is working meanwhile.
+  google.addEventListener("click", () => {
+    google.classList.add("is-busy");
+    google.replaceChildren(h("span.auth-spinner", { "aria-hidden": "true" }), h("span", null, "Opening Google…"));
   });
-  draw();
-  queueMicrotask(() => email.focus());
 
+  queueMicrotask(() => google.focus());
+
+  const head = h("div.auth-head.is-in", null,
+    h("h1.auth-title", null, "Welcome to ClariTale"),
+    h("p.auth-sub", null, "Sign in or create your free account to make explainers and keep them in your history."));
   const logo = () => h("div.brand-logo", null, h("span.brand-mark", { "aria-hidden": "true" }, "✦"), "ClariTale");
   const perk = (t: string) => h("span", null, h("span.icon", { "aria-hidden": "true", html: CHECK }), t);
   return h("div.auth-page.shell", null,
@@ -157,8 +83,11 @@ export function authView(opts: { onDone: () => void; mode?: "login" | "register"
       h("div.auth-center", null,
         h("div.auth-box", null,
           h("div.auth-mobile-logo", null, logo()),
-          seg, head, form)),
-      h("p.auth-legal", null, "AI topics only · Pages are made by AI and checked by code, but can still be wrong.")));
+          head,
+          h("div.auth-form", null, formError, google,
+            h("p.auth-hint.auth-google-note", null, "New here? Continuing with Google creates your account.")))),
+      h("p.auth-legal", null, "AI topics only · Pages are made by AI and checked by code, but can still be wrong. · ",
+        h("a", { href: "/privacy.html", target: "_blank", rel: "noopener" }, "Privacy"))));
 }
 
 /** "3 of 10 explainers today" with a small bar. */
@@ -210,7 +139,7 @@ function alertIn(list: HTMLElement, err: unknown) {
   list.prepend(h("p.account-warn.pref-error", { role: "alert" }, err instanceof Error ? err.message : String(err)));
 }
 
-/** The account panel: allowance, change password, preferences, sign out (here or everywhere), delete the account. */
+/** The account panel: allowance, preferences, sign out (here or everywhere), delete the account. */
 export async function openAccountPanel(): Promise<void> {
   const user = currentUser();
   if (!user) return;
@@ -220,41 +149,17 @@ export async function openAccountPanel(): Promise<void> {
   const meter = h("div", null, allowanceMeter(allowance()));
   refreshAllowance().then((a) => meter.replaceChildren(allowanceMeter(a) ?? ""));
 
-  // Change password
-  const cur = passwordInput("current-password");
-  const next = passwordInput("new-password");
-  const curF = field("Current password", cur.input, cur);
-  const nextF = field("New password", next.input, next);
-  const pwForm = h("form.account-form", { novalidate: true }, curF.el, nextF.el, h("button.btn-pill", { type: "submit" }, "Change password")) as HTMLFormElement;
-  pwForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    curF.error(null); nextF.error(null); status.textContent = "";
-    const problem = checkPassword(next.input.value);
-    if (!cur.input.value) { curF.error("Enter your current password."); return; }
-    if (problem) { nextF.error(problem); return; }
-    try {
-      await changePassword(cur.input.value, next.input.value);
-      pwForm.reset();
-      status.textContent = "Password changed. Other devices were signed out.";
-    } catch (err) {
-      const f = err instanceof ApiError ? err.fields : undefined;
-      if (f?.currentPassword) curF.error(f.currentPassword);
-      else if (f?.newPassword) nextF.error(f.newPassword);
-      else status.textContent = err instanceof Error ? err.message : String(err);
-    }
-  });
-
-  // Delete account (asks for the password; the server checks it)
-  const delPw = passwordInput("current-password");
-  const delF = field("Type your password to confirm", delPw.input, delPw);
+  // Delete account: confirmed by typing the account's email (the server checks it).
+  const delEmail = h("input.auth-input", { type: "email", autocomplete: "off", maxlength: 320, placeholder: user.email }) as HTMLInputElement;
+  const delF = field("Type your email to confirm", delEmail);
   const delForm = h("form.account-form.is-danger", { novalidate: true }, delF.el,
     h("button.btn-pill.is-danger", { type: "submit" }, "Delete my account and history")) as HTMLFormElement;
   delForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     delF.error(null);
-    if (!delPw.input.value) { delF.error("Enter your password."); return; }
+    if (delEmail.value.trim().toLowerCase() !== user.email) { delF.error("Type this account's email."); return; }
     try {
-      await deleteAccount(delPw.input.value);
+      await deleteAccount(delEmail.value);
       close();
     } catch (err) {
       delF.error(err instanceof Error ? err.message : String(err));
@@ -268,7 +173,6 @@ export async function openAccountPanel(): Promise<void> {
     h("p.account-email", null, user.email, h("span.account-plan", null, "Free plan")),
     meter,
     status,
-    h("details.account-section", null, h("summary", null, "Change password"), pwForm),
     preferencesSection(),
     h("div.account-actions", null,
       h("button.btn-pill", { type: "button", onclick: async () => { await logout(); close(); } }, "Sign out"),

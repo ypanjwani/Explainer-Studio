@@ -10,6 +10,10 @@ The SaaS settings (the AI ones are listed in app.py's docstring):
   FREE_DAILY_USD         AI spend per user per UTC day, generations and chat together (default 0.25)
   GLOBAL_DAILY_USD       AI spend for all users together per UTC day; a guard on the API bill (default 10)
   MAX_CONCURRENT_GENERATIONS  generations one user may run at once (default 2)
+  GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET  "Continue with Google" (the only way to make an account); unset = off
+  GOOGLE_REDIRECT_URI    the callback URL registered with Google (default: this server's /api/auth/google/callback)
+  PASSWORD_AUTH          1 = turn email + password sign-up, sign-in and password change back on (default off;
+                         tests only). Sign-in is Google only since Nov 5 2026.
 """
 
 from __future__ import annotations
@@ -57,6 +61,10 @@ class Settings:
     max_concurrent: int
     network_daily_usd: float = 2.0  # all accounts made from one network together (audit F04); 0 = off
     network_daily_signups: int = 20  # new accounts per network per day; 0 = off
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = ""
+    password_auth: bool = False
 
     @staticmethod
     def from_env() -> "Settings":
@@ -84,4 +92,8 @@ class Settings:
             max_concurrent=max(1, int(_num("MAX_CONCURRENT_GENERATIONS", 2))),
             network_daily_usd=max(0.0, _num("NETWORK_DAILY_USD", 2)),
             network_daily_signups=max(0, int(_num("NETWORK_DAILY_SIGNUPS", 20))),
+            google_client_id=os.environ.get("GOOGLE_CLIENT_ID", "").strip(),
+            google_client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", "").strip(),
+            google_redirect_uri=os.environ.get("GOOGLE_REDIRECT_URI", "").strip(),
+            password_auth=os.environ.get("PASSWORD_AUTH", "") == "1",
         )

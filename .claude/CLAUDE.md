@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project description
 
-**ClariTale** (product name since Nov 5 2026; the repo and code still say Explainer Studio) turns an AI research paper (PDF) or a typed AI concept into an interactive explainer page (sliders, live charts, experiments, cards, quizzes, worked examples, an "Ask about this" chatbot). Free accounts (email + password) keep history on the server.
+**ClariTale** (product name since Nov 5 2026; the repo and code still say Explainer Studio) turns an AI research paper (PDF) or a typed AI concept into an interactive explainer page (sliders, live charts, experiments, cards, quizzes, worked examples, an "Ask about this" chatbot). Free accounts ("Continue with Google") keep history on the server.
 
 **AI topics only, and nothing topic-specific:** prompts, components and examples stay topic-neutral, with prompt examples spread across AI areas, because one worked example in a prompt makes the model copy it everywhere.
 
@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Frontend:** Vite + TypeScript, no framework (`app/`). Libraries: zod, KaTeX, Plotly, Vega/Vega-Lite, marked, DOMPurify, pdf.js.
 - **Backend:** Flask (Python 3.12) + gunicorn (`server/explainer/`), SQLAlchemy + Alembic (SQLite in dev, Postgres in prod), Redis for shared rate-limit counters in prod.
 - **AI:** Anthropic API. Haiku writes; "Jev" is a second model that judges/detects (clarity, facts, gates, reviews).
-- **Auth:** email + password, JWT + bcrypt. No email/password verification by design. Per account per day: at most 10 explainers (`FREE_DAILY_GENERATIONS`) and $0.25 of AI spend (`FREE_DAILY_USD`).
+- **Auth:** "Continue with Google" only for new accounts (Nov 5 2026; `server/explainer/google_auth.py`, routes in `routes/auth.py`): Google verifies the email, a Google sign-in with an existing account's email opens that account, and new accounts count toward the per-network sign-up cap. Sessions are our own JWT + refresh cookie either way. **No password option anywhere in the UI** (removed Nov 5 2026): old password accounts sign in with Google under the same email. The password routes (register, login, change password) stay in the code but answer 403 `password_off` unless `PASSWORD_AUTH=1` (tests use it to make accounts). Google-only accounts have `password_hash = NULL`; deleting any account is confirmed by typing its email. Privacy policy: `app/public/privacy.html`. Per account per day: at most 10 explainers (`FREE_DAILY_GENERATIONS`) and $0.25 of AI spend (`FREE_DAILY_USD`).
 - **Hosting:** Docker on Render (`render.yaml`).
 
 ## Run the local server
@@ -26,12 +26,12 @@ From `explainer-studio/`:
    py -3.12 -m venv server/.venv
    server/.venv/Scripts/python -m pip install -e "server[dev]"
    ```
-2. **Keys:** create `.env` with `ANTHROPIC_API_KEY=...` and `JEV_API_KEY=...`.
+2. **Keys:** create `.env` with `ANTHROPIC_API_KEY=...`, `JEV_API_KEY=...`, `GOOGLE_CLIENT_ID=...` and `GOOGLE_CLIENT_SECRET=...` (see `.env.example`).
 3. **Start:** `npm run dev`. This:
    - builds the viewer
    - brings the dev database up to date (`server/instance/dev.db`)
    - starts Vite on :5173 and the Flask API on :8787 (Vite proxies `/api` to Flask)
-4. **Open** `http://localhost:5173` and sign up or sign in.
+4. **Open** `http://localhost:5173` (not `127.0.0.1`: Google only accepts the registered redirect URI) and Continue with Google. Needs `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` in `.env`; while the Google app is in Testing, only its listed test users can sign in.
 5. **Stop:** Ctrl+C. On Windows, if port 8787 or 5173 stays busy afterwards, a leftover Flask/Vite process is still running; end it in Task Manager.
 
 ## Other commands

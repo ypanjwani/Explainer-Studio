@@ -82,7 +82,14 @@ class ChangePassword(_Strict):
 
 
 class DeleteAccount(_Strict):
-    password: str = Field(min_length=1, max_length=200)
+    """The account's email, typed to confirm (or, for a password account, its password)."""
+    password: str | None = Field(default=None, min_length=1, max_length=200)
+    email: str | None = Field(default=None, max_length=320)
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str | None) -> str | None:
+        return None if v is None else normalize_email(v)
 
 
 class Empty(_Strict):

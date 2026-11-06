@@ -2,7 +2,7 @@
 # One web service built from this repo's Dockerfile (the built frontend and the Flask API
 # together), a Postgres database (accounts, history, usage, paper cache; migrated by the container
 # on start) and a Key Value (Redis) instance for the rate limits, which all gunicorn workers must
-# share. Set ANTHROPIC_API_KEY and JEV_API_KEY when Render asks; JWT_SECRET is generated once. The
+# share. Set ANTHROPIC_API_KEY, JEV_API_KEY, GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET when Render asks; JWT_SECRET is generated once. The
 # app's own URL may call the API automatically (add other sites to ALLOWED_ORIGINS).
 services:
   - type: web
@@ -16,6 +16,14 @@ services:
         sync: false
       - key: JEV_API_KEY
         sync: false
+      # "Continue with Google" (the only way to make an account): the Web OAuth client of the ClariTale project
+      # in Google Cloud Console. The redirect URI must match one listed on that client exactly.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        value: https://explainer-studio-1.onrender.com/api/auth/google/callback
       - key: TRUST_PROXY
         value: "1"
       # Proxies in front of the app that set X-Forwarded-For: 1 = Render alone. Use 2 if a CDN

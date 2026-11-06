@@ -215,7 +215,7 @@ export class App {
     this.root.classList.toggle("signed-out", !this.user);
     if (window.matchMedia("(max-width: 800px)").matches) this.setSidebar(false);
 
-    if (!this.user) this.view.replaceChildren(authView({ onDone: () => { if (location.hash !== "#/") location.hash = "#/"; } }));
+    if (!this.user) this.view.replaceChildren(authView());
     else if (kind === "c" && id) {
       const rec = this.records.find((r) => r.id === id) ?? (await getRecord(id));
       if (!rec) { location.hash = "#/"; return; }
