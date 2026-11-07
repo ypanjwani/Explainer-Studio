@@ -92,10 +92,10 @@ export function authView(): HTMLElement {
 
 /** "3 of 10 explainers today" with a small bar. */
 /**
- * "3 of 10 free explainers today" (sidebar, home, account panel). Hidden for v1 (Nov 2026): readers don't see
- * credits; the server still enforces the daily limits and says so when one is reached. The code stays.
+ * "3 of 10 free explainers today" (sidebar, home, account panel). Shown: it is a count, not a cost. Set false to hide it;
+ * the server enforces the daily limits either way and says so when one is reached.
  */
-const SHOW_ALLOWANCE = false;
+const SHOW_ALLOWANCE = true;
 
 export function allowanceMeter(a: Allowance | null): HTMLElement | null {
   if (!a || !SHOW_ALLOWANCE) return null;
