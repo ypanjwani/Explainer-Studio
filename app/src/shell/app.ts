@@ -34,6 +34,10 @@ const EDIT_CHAT = false;
 const FEEDBACK = false;
 /** "What do you want to add to each section?" (extras.ts). Hidden for v1: new explainers get no extras ("None"); the code stays. */
 const EXTRAS_QUESTION = false;
+/**
+ * The AI cost on the result card ("≈ $0.006"), hidden from readers for v1 (Nov 2026). The data is still saved.
+ */
+const SHOW_COST = false;
 
 const SUGGESTIONS = [
   { label: "Attention in transformers", text: "Explain self-attention in transformers: queries, keys, values and why it works." },
@@ -1233,7 +1237,7 @@ function withPromptText(req: GenerateRequest, text: string): GenerateRequest {
   return out;
 }
 
-/** The result card's settings line: "Interactive · low effort · hands-on · ≈ $0.006 · 47s". */
+/** The result card's settings line: "Explorer · low effort · hands-on · 47s" (plus "≈ $0.006" when SHOW_COST). */
 function resultMeta(rec: ExplainerRecord): string {
   const u = rec.usage!;
   const parts = [MODE_NAME[u.quality] ?? u.quality];
@@ -1244,7 +1248,8 @@ function resultMeta(rec: ExplainerRecord): string {
   if (u.effort === "low" || u.effort === "high") parts.push(`${u.effort} effort`);
   if (rec.request.interactivity && rec.request.interactivity !== "balanced") parts.push(rec.request.interactivity === "reading" ? "mostly reading" : "hands-on");
   if (rec.request.level && rec.request.level !== "auto") parts.push(LEVEL_CHOICES[rec.request.level].split(":")[0].toLowerCase());
-  parts.push(`≈ $${u.totalUsd.toFixed(3)}`, `${u.seconds}s`);
+  if (SHOW_COST) parts.push(`≈ $${u.totalUsd.toFixed(3)}`);
+  parts.push(`${u.seconds}s`);
   return parts.join(" · ");
 }
 

@@ -91,8 +91,14 @@ export function authView(): HTMLElement {
 }
 
 /** "3 of 10 explainers today" with a small bar. */
+/**
+ * "3 of 10 free explainers today" (sidebar, home, account panel). Hidden for v1 (Nov 2026): readers don't see
+ * credits; the server still enforces the daily limits and says so when one is reached. The code stays.
+ */
+const SHOW_ALLOWANCE = false;
+
 export function allowanceMeter(a: Allowance | null): HTMLElement | null {
-  if (!a) return null;
+  if (!a || !SHOW_ALLOWANCE) return null;
   const pct = a.generationsLimit ? Math.min(100, (100 * a.generationsUsed) / a.generationsLimit) : 100;
   const out = a.generationsUsed >= a.generationsLimit || a.usdUsed >= a.usdLimit;
   return h("div.allow", { class: out ? "is-out" : "" },
