@@ -9,6 +9,7 @@ Tables:
   user_preferences a reader's saved preferences (Feedback), added to the planner for that reader's pages only
   feedback        each Feedback message and what it became (a page change request and/or a preference)
   paper_cache     a paper's section filter and summaries, keyed by a hash of its text, shared by every user
+  shares          a public "Share link" (/s/<id>): a copy of one explainer's spec, one per (user, record)
 
 Schema changes go through Alembic (server/migrations); tests build the tables with create_all.
 """
@@ -155,6 +156,21 @@ class PaperCache(Base):
     hits: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
     used_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+
+
+class Share(Base):
+    """A public link to one explainer (routes/share.py): anyone with /s/<id> can view the copied spec. Sharing the
+    same explainer again updates the copy and keeps the id. Deleted with the explainer or the account."""
+    __tablename__ = "shares"
+    __table_args__ = (Index("ix_shares_user_record", "user_id", "record_id", unique=True),)
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)  # random, hard to guess (secrets.token_urlsafe)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    record_id: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(200))
+    spec: Mapped[dict[str, Any]] = mapped_column(JSON)
+    size: Mapped[int] = mapped_column(Integer, default=0)  # bytes of spec
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+    updated_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
 
 
 class Database:

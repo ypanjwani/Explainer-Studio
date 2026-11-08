@@ -1,0 +1,8 @@
+/* "Share link" dialog (shell/share.ts). The box, header and buttons reuse the account dialog's styles. */
+.share-status { margin: 10px 0 0; color: var(--text-2); font-size: 0.9rem; }
+.share-status.is-error { color: var(--bad); }
+.share-body:empty { display: none; }
+.share-row { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
+.share-url { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
+.share .account-warn { margin: 12px 0 0; }
+.share .account-actions a.btn-pill { text-decoration: none; display: inline-flex; align-items: center; }

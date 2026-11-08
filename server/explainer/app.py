@@ -3,6 +3,7 @@
 Routes (each module's docstring has the details):
   /api/auth/*        accounts: register, login, refresh, logout, me, password, delete   (routes/auth.py)
   /api/explainers/*  the signed-in reader's saved history                                 (routes/history.py)
+  /api/share, /s/<id>  public share links: a read-only copy of one explainer               (routes/share.py)
   /api/generate, /api/chat, /api/edit, /api/route, /api/section, /api/formula  the AI calls, signed in (routes/ai.py)
 
 Every request goes through middleware.py (request id, Origin/CORS, JSON, security headers, JSON errors).
@@ -45,7 +46,7 @@ from .config import Settings
 from .db import Database
 from .middleware import ApiError, Ctx
 from .paper_cache import PaperStore
-from .routes import ai, auth, history, preferences
+from .routes import ai, auth, history, preferences, share
 
 ROOT = Path(__file__).resolve().parents[2]  # explainer-studio/ (when run from the source tree)
 DIST = Path(os.environ.get("EXPLAINER_DIST") or ROOT / "dist")  # the built frontend
@@ -95,7 +96,7 @@ def create_app() -> Flask:
     }
 
     middleware.install(app)
-    for bp in (auth.bp, history.bp, ai.bp, preferences.bp):
+    for bp in (auth.bp, history.bp, ai.bp, preferences.bp, share.bp, share.page_bp):
         app.register_blueprint(bp)
 
     @app.get("/api/health")

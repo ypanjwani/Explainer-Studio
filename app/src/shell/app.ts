@@ -18,6 +18,7 @@ import { createChat } from "../render/chatbot";
 import { h, uid } from "../render/dom";
 import { inheritState, renderExplainer, storeFor, type DrawerState } from "../render/explainer";
 import { exportHtml } from "../render/export";
+import { LINK_ICON, openShareDialog } from "./share";
 import { closeHistory, deleteRecord, fetchRecord, flushAll, flushRecord, getRecord, importLegacy, legacyRecords, openHistory, putRecord, type ExplainerRecord } from "../store/history";
 import { allowanceMeter, authView, legacyOffer, openAccountPanel } from "./account";
 import { createComposer, type ComposerChoices, type ComposerEl, type ComposerSubmit } from "./composer";
@@ -313,6 +314,7 @@ export class App {
       item.append(h("div.sb-menu", { role: "menu" },
         h("button.sb-menu-item", { type: "button", onclick: () => this.rename(r, item) }, icon(ICON.pencil), "Rename"),
         lastDone ? h("button.sb-menu-item", { type: "button", onclick: () => { this.menuOpen = null; this.drawSidebar(); this.doExport(lastDone.spec!); } }, icon(ICON.download), thread.length > 1 ? "Export latest" : "Export HTML") : null,
+        lastDone ? h("button.sb-menu-item", { type: "button", onclick: () => { this.menuOpen = null; this.drawSidebar(); this.doShare(lastDone.id); } }, icon(LINK_ICON), thread.length > 1 ? "Share latest" : "Share link") : null,
         del));
     }
     return item;
@@ -346,6 +348,7 @@ export class App {
     if (rec?.spec && x === "x") {
       actions.push(h("a.tb-btn", { href: `#/c/${rec.id}` }, icon(ICON.request), "Request"));
       actions.push(h("button.tb-btn", { type: "button", onclick: () => this.doExport(rec.spec!) }, icon(ICON.download), "Export"));
+      actions.push(h("button.tb-btn", { type: "button", onclick: () => this.doShare(rec.id) }, icon(LINK_ICON), "Share"));
       if (FEEDBACK) actions.push(h("button.tb-btn", { type: "button", onclick: () => this.openFeedback(rec) }, icon(ICON.spark), "Feedback"));
     } else if (rec?.spec) {
       actions.push(h("a.tb-btn.is-primary", { href: `#/c/${rec.id}/x` }, "Open explainer", h("span", { "aria-hidden": "true" }, "→")));
@@ -365,6 +368,11 @@ export class App {
     } catch (e) {
       toast(e instanceof Error ? e.message : "Export failed.");
     }
+  }
+
+  /** "Share link": a public link to this explainer (shell/share.ts); a page with no light/dark of its own uses the one on screen. */
+  private doShare(recordId: string) {
+    openShareDialog(recordId, isDark() ? "dark" : "light").catch((e) => toast(e instanceof Error ? e.message : "Sharing failed."));
   }
 
   // ---------- views ----------

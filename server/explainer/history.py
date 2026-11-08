@@ -27,7 +27,7 @@ from typing import Any
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from .db import Database, Explainer, Generation, User, now_ms
+from .db import Database, Explainer, Generation, Share, User, now_ms
 from .middleware import ApiError
 
 log = logging.getLogger("explainer")
@@ -137,6 +137,7 @@ def remove(db: Database, user_id: str, record_id: str) -> bool:
     with db.session() as s:
         n = s.execute(delete(Explainer).where(Explainer.user_id == user_id, Explainer.id == record_id)).rowcount
         s.execute(delete(Generation).where(Generation.user_id == user_id, Generation.record_id == record_id))
+        s.execute(delete(Share).where(Share.user_id == user_id, Share.record_id == record_id))  # its share link stops working
     return bool(n)
 
 
