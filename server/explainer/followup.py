@@ -97,6 +97,42 @@ def parse_pick(p: Any) -> dict | None:
     return {"targets": targets, "pageWide": page_wide}
 
 
+PLAN_STEPS = 20  # like understand.MAX_STEPS
+PLAN_INTENTS = 30  # understand.MAX_INTENTS, plus knock-ons
+# understand.OPS without "revert" (an undo never reaches the pipeline: the app copies a version).
+PLAN_OPS = ("add_section", "remove_section", "move_section", "split_section", "merge_sections", "set_level", "set_tone", "set_length",
+            "edit_page_meta")
+
+
+def parse_plan(p: Any) -> dict | None:
+    """FollowUp.plan (follow-ups v3, understand.py): the sections the reader's follow-up is about, each with their intent, and
+    its structural steps; well-formed only (the pipeline then checks them against the page, understand.clean_plan). None when
+    there is nothing usable."""
+    if not isinstance(p, dict):
+        return None
+    steps = []
+    for s in (p.get("steps") if isinstance(p.get("steps"), list) else [])[:PLAN_STEPS]:
+        if not isinstance(s, dict) or s.get("op") not in PLAN_OPS:
+            continue
+        step = {k: js_slice(_str(s.get(k)), 0, 800 if k == "what" else 200) for k in ("section", "other", "after", "level", "what", "quote")}
+        step["op"] = s["op"]
+        if _str(s.get("unsure")).strip():  # understand.flag: the reader confirmed a part it wasn't sure of
+            step["unsure"] = js_slice(_str(s["unsure"]), 0, 200)
+        steps.append(step)
+    sections = []
+    for i in (p.get("sections") if isinstance(p.get("sections"), list) else [])[:PLAN_INTENTS]:
+        if not isinstance(i, dict) or not _str(i.get("section")) or not _str(i.get("intent")):
+            continue
+        item = {"section": js_slice(_str(i["section"]), 0, 200), "intent": js_slice(_str(i["intent"]), 0, 1600), "quote": js_slice(_str(i.get("quote")), 0, 200)}
+        if i.get("derived") is True:
+            item["derived"] = True
+            item["because"] = js_slice(_str(i.get("because")), 0, 200)
+        if _str(i.get("unsure")).strip():
+            item["unsure"] = js_slice(_str(i["unsure"]), 0, 200)
+        sections.append(item)
+    return {"sections": sections, "steps": steps} if sections or steps else None
+
+
 def parse_feedback_plan(fb: Any) -> dict | None:
     """FollowUp.feedback (Feedback v2): the change the reader confirmed, {id, targets, keep, pageWide}. Only well-formed
     targets are kept; the pipeline then checks them against the page (targets.clean_targets). None when unusable."""
@@ -144,7 +180,12 @@ def parse_follow_up(f: Any) -> dict | None | str:
             if fb is None:
                 return "The feedback's change couldn't be read. Send the feedback again."
             out["feedback"] = fb
-        if f.get("pick") is not None and not out.get("add") and not out.get("feedback"):  # /api/followup/pick's choice
+        if f.get("plan") is not None and not out.get("add") and not out.get("feedback"):  # /api/followup/plan's steps
+            pl = parse_plan(f["plan"])
+            if pl is None:
+                return "The change couldn't be read. Send your request again."
+            out["plan"] = pl
+        if f.get("pick") is not None and not out.get("add") and not out.get("feedback") and not out.get("plan"):  # /api/followup/pick's choice
             pk = parse_pick(f["pick"])
             if pk is None:
                 return "The part to change couldn't be read. Send your request again."

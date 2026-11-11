@@ -1,6 +1,8 @@
 # Follow-ups on Playground and Quick read pages
 
-Status: built Nov 5 2026. 585 server + 239 frontend tests pass. One live browser test passed. Not committed.
+Status: built Nov 5 2026. 585 server + 239 frontend tests pass. One live browser test passed.
+Nov 9 2026: follow-ups v3 (`.claude/followup-v3-plan.md`: understand → section editor) replaces this pick when `FOLLOWUP_PLAN=1`; with the flag
+off (the default) everything here runs unchanged.
 Applies to `playground` and `lite-plus` (Quick read) pages only. Playground 2.0 and the other modes keep the old finder path.
 File map and rules: `.claude/rules/followup.md`. This file explains what was built and why.
 

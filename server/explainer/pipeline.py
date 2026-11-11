@@ -51,6 +51,7 @@ from .filter import filter_sections
 from .paper_cache import paper_key
 from .revise import improve_request, parse_revision, restore_kept_widgets, revision_summary
 from . import feedback_check
+from .modes.followup import steps as plan_steps  # legacy: v3 now lives in modes/followup (this path runs it only with MODES_SPLIT=0)
 from .targets import apply_targets, clean_targets, every_section, find_targets
 from .followup_pick import MODES as PICK_MODES
 from . import smart as smart_mode
@@ -513,7 +514,7 @@ def section_tools(extras: list[str] | None) -> list[str]:
 
 
 def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | None = None, plan_effort: str = "medium",
-             paper_cache: Any = None, usage: UsageLog | None = None, checks: bool = True) -> dict:
+             paper_cache: Any = None, usage: UsageLog | None = None, checks: bool = True, page_index: Any = None) -> dict:
     """{"spec", "usage"} for one GenerateRequest. Progress goes to emit().
 
     paper_cache: optional get(key)/put(key, value) store (paper_cache.PaperStore) for a paper's filter and summaries.
@@ -695,6 +696,9 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
     # to the page is an error, never a silent whole-page rewrite. pageWide: the reader chose to change the whole page.
     fb = follow.get("feedback") if follow and follow["kind"] == "revise" else None
     pick = follow.get("pick") if follow and follow["kind"] == "revise" and not fb else None
+    # Follow-ups v3 (understand.py, steps.py): the reader's follow-up as sections with intents and structural steps
+    # (FollowUp.plan), run by steps.run_plan: a section editor decides what to change in each section.
+    planned = follow.get("plan") if follow and follow["kind"] == "revise" and not fb and req.get("quality") in PICK_MODES else None
     picked_page = follow is not None and follow["kind"] == "revise" and req.get("quality") in PICK_MODES  # Playground, Quick read
     page_fields = False  # a change of the whole page made as targets: the title, key intuition and level may change too
     targetable = (base_outline is not None and follow and follow["kind"] == "revise" and not adding and not follow.get("add")
@@ -710,6 +714,11 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
             raise ReaderError("This feedback couldn't be matched to the page, so nothing was changed. Send it again and pick the part you mean.")
         targeted = found["targets"]
         _step(emit, "plan", "running", "Changing " + (f"{len(targeted)} parts" if len(targeted) > 1 else "one part") + " of the page")
+    elif targetable and planned:
+        targeted = planned
+        page_fields = plan_steps.touches_page(planned)
+        n = len(planned["sections"]) + len(planned["steps"])
+        _step(emit, "plan", "running", "Looking at " + (f"{n} parts" if n > 1 else "one part") + " of the page")
     elif targetable and (pick or picked_page):
         # Playground and Quick read pages (followup_pick.py): the parts the reader's request was matched to before this run
         # (FollowUp.pick), or, from an older app, the finder now. A change of the whole page is a text change of every
@@ -785,7 +794,11 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
                 return write_outline(client, text, emit, usage, revise_system, parse, effort, whole="your reply")
             def run_targets(ts: list[dict]) -> dict:
                 return apply_targets(client, usage, jev_key, follow, base_outline, ts, req["text"], ask, effort, req.get("planThinking", True), req.get("quality"), prose, page_fields)
-            r = run_targets(targeted)
+            if planned:  # raises steps.Checked (all checked, nothing to change) or ReaderError (nothing could be changed)
+                r = plan_steps.run_plan(client, usage, jev_key, follow, base_outline, planned, req["text"], ask, revise_system, effort,
+                                        req.get("planThinking", True), req.get("quality"), prose, page_index)
+            else:
+                r = run_targets(targeted)
             if fb:  # is each changed part better than before? (feedback_check.py)
                 _step(emit, "plan", "running", "Checking the changes")
                 r = feedback_check.check(client, usage, jev_key, follow, base_outline, r, targeted, req["text"], ask, run_targets, fb["id"])

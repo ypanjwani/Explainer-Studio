@@ -309,6 +309,15 @@ a { color: inherit; }
 .msg-text.is-muted { color: var(--muted); font-style: italic; }
 .msg-choice { margin: 0 0 8px; color: var(--muted); font-size: 0.86rem; }
 .msg-choices { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }
+/* Follow-ups v3: the plan to confirm, the "add detail" box under a question, and an answer in the thread. */
+.msg-plan { margin: 0; padding: 12px 14px 12px 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; line-height: 1.5; width: 100%; max-width: 560px; box-sizing: border-box; }
+.msg-plan li + li { margin-top: 4px; }
+.msg-plan li.is-unsure { list-style: none; margin-left: -20px; }
+.msg-plan li.is-unsure label { display: flex; gap: 6px; align-items: flex-start; cursor: pointer; }
+.msg-plan li.is-unsure input { margin-top: 0.3em; flex: none; }
+.plan-detail { width: 100%; max-width: 420px; box-sizing: border-box; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 0.9rem; }
+.msg-answer p { margin: 0 0 0.6em; }
+.msg-answer p:last-child { margin-bottom: 0; }
 
 .steps { list-style: none; margin: 0; padding: 14px 16px; display: flex; flex-direction: column; gap: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 520px; }
 .step { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 0.92rem; flex-wrap: wrap; }

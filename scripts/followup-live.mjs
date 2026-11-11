@@ -5,7 +5,10 @@
 //
 //   node scripts/followup-live.mjs --base playground-low-1 --quality playground --effort low --name pg-chart "Let me change the number of keys in the d_k chart"
 //
-// Output: .variety/followup/<name>.json ({spec, usage, request, base}).
+// --plan: follow-ups v3 (server/explainer/modes/followup/understand.py, steps.py; on unless the API has FOLLOWUP_PLAN=0): ask /api/followup/plan first, print the
+// plan (or the question / refusal / answer), and build with its steps as FollowUp.plan. A question or refusal stops there.
+//
+// Output: .variety/followup/<name>.json ({spec, usage, request, base, plan}).
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "vite";
@@ -17,6 +20,8 @@ const base = opt("base", "playground-low-1");
 const quality = opt("quality", "quality-plus");
 const effort = opt("effort", "low");
 const name = opt("name", `${base}-${Date.now().toString(36)}`);
+const usePlan = args.includes("--plan");
+if (usePlan) args.splice(args.indexOf("--plan"), 1);
 const text = args.join(" ");
 if (!text) { console.error("Give the follow-up request as the last argument."); process.exit(1); }
 
@@ -43,6 +48,24 @@ if (!auth?.ok) {
 const token = (await auth.json()).accessToken;
 
 const t0 = Date.now();
+let plan = null;
+if (usePlan) {
+  const r = await fetch(`${API}/api/followup/plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "http://localhost:5173", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ text, quality, followUp }),
+  });
+  plan = await r.json();
+  console.log(`\n[${name}] plan (${plan.kind ?? "error"}, $${(plan.usd ?? 0).toFixed(4)}):`);
+  if (plan.kind === "change") {
+    plan.summary.forEach((l) => console.log(`  - ${l}`));
+    if (plan.confirm) console.log("  (the app would ask the reader to confirm this plan)");
+    followUp.plan = { sections: plan.sections, steps: plan.steps };
+  } else {
+    console.log(`  ${JSON.stringify(plan.question ?? plan.reason ?? plan.answer ?? plan.error ?? plan, null, 1)}`);
+    process.exit(0);
+  }
+}
 const res = await fetch(`${API}/api/generate`, {
   method: "POST",
   headers: { "Content-Type": "application/json", Origin: "http://localhost:5173", Authorization: `Bearer ${token}` },
@@ -51,17 +74,19 @@ const res = await fetch(`${API}/api/generate`, {
 if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
 const events = (await res.text()).split("\n").filter((l) => l.startsWith("data: ")).map((l) => JSON.parse(l.slice(6)));
 const err = events.find((e) => e.type === "error");
+if (err && err.message.startsWith("✓ ")) { console.log(`CHECKED (no change): ${err.message.slice(2)}`); process.exit(0); }
 if (err) { console.log(`ERROR: ${err.message}`); process.exit(1); }
 const done = events.find((e) => e.type === "done");
 if (!done) throw new Error("stream ended without a spec");
 const { spec, usage } = done;
 
 mkdirSync(".variety/followup", { recursive: true });
-writeFileSync(`.variety/followup/${name}.json`, JSON.stringify({ request: text, quality, effort, base, spec, usage }, null, 1));
+writeFileSync(`.variety/followup/${name}.json`, JSON.stringify({ request: text, quality, effort, base, spec, usage, plan }, null, 1));
 
-const plan = events.filter((e) => e.type === "step" && e.step === "plan").map((e) => e.detail).filter(Boolean);
+const planDetails = events.filter((e) => e.type === "step" && e.step === "plan").map((e) => e.detail).filter(Boolean);
 console.log(`\n[${name}] ${quality}/${effort} on ${base}: "${text}"`);
-console.log(`  plan steps: ${plan.join(" → ")}`);
+console.log(`  plan steps: ${planDetails.join(" → ")}`);
+for (const r of spec.revision?.steps ?? []) console.log(`  ${{ done: "✓", kept: "○", undone: "↺", skipped: "–" }[r.status]} ${r.label}${r.why ? ` (${r.why})` : ""}`);
 console.log(`  revision: ${JSON.stringify(spec.revision ?? "none (written whole)")}`);
 console.log(`  stages: ${prev.stages.length} → ${spec.stages.length}`);
 

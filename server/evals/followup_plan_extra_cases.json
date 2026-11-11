@@ -1,0 +1,26 @@
+{
+  "about": "Follow-ups v3 cases the pick's sheet can't express. Pages are the keys of followup_pick_cases.json (p1-p5 Playground, p6-p8 Quick read). expect: the reply kind (change / ask / cannot / answer / revert); ops: structural steps that must appear; intent: true = at least one section intent must appear (the section editor decides what changes there).",
+  "cases": [
+    {"id": "x-01", "page": "p1", "request": "Can I type my own numbers into the playground instead of using sliders?", "expect": "cannot"},
+    {"id": "x-02", "page": "p2", "request": "Show a video of the training run", "expect": "cannot"},
+    {"id": "x-03", "page": "p3", "request": "Run a real model on my own data in the demo", "expect": "cannot"},
+    {"id": "x-04", "page": "p6", "request": "Add a playground with sliders to the first section", "expect": "cannot"},
+    {"id": "x-05", "page": "p7", "request": "Add a quiz at the end", "expect": "cannot"},
+    {"id": "x-06", "page": "p1", "request": "Why does the curve flatten out at the end?", "expect": "answer"},
+    {"id": "x-07", "page": "p4", "request": "What is the difference between the two charts in section 2?", "expect": "answer"},
+    {"id": "x-08", "page": "p6", "request": "Is this the same idea as regularization?", "expect": "answer"},
+    {"id": "x-09", "page": "p2", "request": "undo that", "expect": "revert"},
+    {"id": "x-10", "page": "p5", "request": "Go back to how it was before", "expect": "revert"},
+    {"id": "x-11", "page": "p1", "request": "Put section 3 before section 2", "expect": "change", "ops": ["move_section"]},
+    {"id": "x-12", "page": "p3", "request": "Merge the last two sections into one", "expect": "change", "ops": ["merge_sections"]},
+    {"id": "x-13", "page": "p2", "request": "Split section 2 into two smaller sections", "expect": "change", "ops": ["split_section"]},
+    {"id": "x-14", "page": "p4", "request": "Rewrite the whole page for complete beginners", "expect": "change", "ops": ["set_level"]},
+    {"id": "x-15", "page": "p5", "request": "Remove the playground from section 1 but keep the text", "expect": "change", "intent": true},
+    {"id": "x-16", "page": "p1", "request": "The formula in section 2 is wrong, the sign should be negative", "expect": "change", "intent": true},
+    {"id": "x-17", "page": "p7", "request": "Use a cooking analogy throughout the page", "expect": "change", "ops": ["set_tone"]},
+    {"id": "x-18", "page": "p8", "request": "Change the page title to something shorter", "expect": "change", "ops": ["edit_page_meta"]},
+    {"id": "x-19", "page": "p1", "request": "Check the last playground, if it is already correct then leave it but if anything looks wrong then correct it", "expect": "change", "intent": true},
+    {"id": "x-20", "page": "p2", "request": "Look for the first playground and if there is any mismatch, wrong, etc then correct it", "expect": "change", "intent": true},
+    {"id": "x-21", "page": "p6", "request": "Make sure the chart in section 2 matches what the text says", "expect": "change", "intent": true}
+  ]
+}

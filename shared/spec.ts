@@ -634,7 +634,7 @@ export interface ExplainerSpec {
   /** Quality+ "Add to each section": a deeper explanation and/or the same explanation in other words, per stage id, written with the page and opened from the section's buttons. Absent = none. */
   sectionNotes?: Record<string, SectionNotes>;
   /** A Quality+ revision made as changes (server/explainer/revise.py): stages added, rewritten, removed and kept as they were. Absent = written whole. */
-  revision?: { added: number; replaced: number; removed: number; kept: number; charts?: number };
+  revision?: { added: number; replaced: number; removed: number; kept: number; charts?: number; moved?: number; steps?: StepReport[] };
   /** Smart mode (server/explainer/smart.py): sections written as quick, interactive and creative, custom widgets built, and how many sections Jev judged (the rest fell back to Interactive). Absent = not Smart. */
   smart?: { quick: number; interactive: number; creative: number; custom: number; byJev: number };
   /** "Go deeper" on formula blocks (POST /api/formula): explanations written when a reader first clicks, saved here so
@@ -740,7 +740,7 @@ export interface PickTarget { part: FollowUpTarget["part"] | "remove"; stage: st
 export interface FollowUpPick { targets: PickTarget[]; pageWide: boolean }
 
 export type FollowUp =
-  | { kind: "revise"; outline: string; design: Design; accent?: string; colorMode?: ColorMode; source?: string; kept?: KeptParts; widgets?: Record<string, Extract<Block, { type: "widget" }>[]>; add?: true; feedback?: FeedbackRun; pick?: FollowUpPick }
+  | { kind: "revise"; outline: string; design: Design; accent?: string; colorMode?: ColorMode; source?: string; kept?: KeptParts; widgets?: Record<string, Extract<Block, { type: "widget" }>[]>; add?: true; feedback?: FeedbackRun; pick?: FollowUpPick; plan?: FollowUpPlan }
   | { kind: "new"; previous: string; source?: string };
 
 /** POST /api/route: does a follow-up change the explainer above, or ask for a new one? */
@@ -757,6 +757,44 @@ export type PickResponse =
   | ({ by: "jev" | "jev+haiku" | "haiku"; usd: number } & FollowUpPick)
   | { question: { text: string; options: PickOption[] }; by: "jev+haiku" | "haiku"; usd: number }
   | { error: string; usd: number };
+
+/**
+ * Follow-ups v3 (server/explainer/understand.py, steps.py, section_editor.py; FOLLOWUP_PLAN=1): a typed follow-up on a
+ * Playground or Quick read page as the sections it is about (each with the reader's intent; a section editor decides what
+ * to change there) plus typed changes to the page's structure. Keep PLAN_OPS equal to understand.OPS.
+ */
+export const PLAN_OPS = [
+  "add_section", "remove_section", "move_section", "split_section", "merge_sections", "set_level", "set_tone", "set_length",
+  "edit_page_meta", "revert",
+] as const;
+export type PlanOp = (typeof PLAN_OPS)[number];
+/** A structural or page-wide step. section/other/after are stage ids ("" when unused; after may be "start"); quote: the
+ * reader's words it comes from. unsure: understand.flag's note when it may not be what the reader asked (the plan card shows
+ * it for the reader to confirm). */
+export interface PlanStep { op: PlanOp; section: string; other: string; after: string; level: "" | Level; what: string; quote: string; unsure?: string }
+/** What the reader wants in one section, in their terms (never "edit the text/playground": the section editor decides).
+ * derived: added by the app as a knock-on fix (a mention of a removed section, a playground for a new level), with `because`. */
+export interface SectionIntent { section: string; intent: string; quote: string; derived?: true; because?: string; unsure?: string }
+/** FollowUp.plan: what the reader's follow-up became (and confirmed, when the plan card asked). */
+export interface FollowUpPlan { sections: SectionIntent[]; steps: PlanStep[] }
+export interface PlanOption { label: string; sections: SectionIntent[]; steps: PlanStep[] }
+/** POST /api/followup/plan. option + extra: the reader picked an option of an earlier question (and added words to it).
+ * history: the conversation's earlier prompts, each with what it did, oldest first. */
+export interface PlanRequest { text: string; quality: Quality; followUp: Extract<FollowUp, { kind: "revise" }>; option?: PlanOption; extra?: string; history?: string[] }
+export type PlanResponse =
+  | { kind: "change"; sections: SectionIntent[]; steps: PlanStep[]; summary: string[]; confirm: boolean; fixes?: string[]; usd: number }
+  | { kind: "ask"; question: { text: string; options: PlanOption[] }; usd: number }
+  | { kind: "cannot"; reason: string; alternative: PlanOption | null; usd: number }
+  | { kind: "answer"; answer: string; usd: number }
+  | { kind: "revert"; usd: number }
+  | { kind: "off"; usd: number }
+  | { error: string; usd: number };
+/** How one part of a plan ended (spec.revision.steps): done; kept (the editor checked it and found nothing to change);
+ * undone (changed, failed its check, put back); skipped. */
+export interface StepReport { label: string; status: "done" | "kept" | "undone" | "skipped"; why?: string; derived?: true }
+/** A follow-up whose sections the editor checked and found right: the build ends with this prefix on its message, and the
+ * app shows it as a reply, not an error (no new version, not counted). Keep equal to steps.CHECKED. */
+export const CHECKED_PREFIX = "✓ ";
 
 export type GenerateRequest =
   | ({ mode: "concept"; text: string } & RequestOptions)

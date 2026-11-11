@@ -30,6 +30,8 @@ from sqlalchemy.orm import Session
 from .db import Database, Explainer, Generation, Share, User, now_ms
 from .middleware import ApiError
 
+CHECKED = "✓ "  # a follow-up that was checked and needed no change (steps.CHECKED; shared/spec.ts CHECKED_PREFIX)
+
 log = logging.getLogger("explainer")
 
 STALE_MS = 10 * 60 * 1000  # a running generation with no progress for this long died with its worker
@@ -42,6 +44,11 @@ def _apply_generation(data: dict, gen: Generation) -> dict:
     out = {**data, "steps": gen.steps or {}, "updatedAt": max(int(data.get("updatedAt") or 0), gen.updated_at)}
     if gen.status == "done" and gen.spec:
         out.update(status="done", spec=gen.spec, usage=gen.usage, title=str(gen.spec.get("title") or out.get("title", ""))[:200])
+        out.pop("error", None)
+    elif gen.status == "error" and (gen.error or "").startswith(CHECKED):
+        # Follow-ups v3 (steps.Checked): the sections were checked and found right. A reply in the thread, not an error and
+        # not a new version (no spec).
+        out.update(status="done", answer=gen.error[len(CHECKED):])
         out.pop("error", None)
     elif gen.status == "error":
         out.update(status="error", error=gen.error or "Generation failed.")

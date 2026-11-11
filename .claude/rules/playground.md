@@ -3,6 +3,7 @@ description: Rules for Playground mode (playground), JSON-spec playgrounds check
 paths:
   - "shared/playground/**"
   - "scripts/check-playground.mjs"
+  - "server/explainer/modes/**"
   - "server/explainer/codelab.py"
   - "server/explainer/codelab_edit.py"
   - "app/src/render/components/playground-src.ts"
@@ -10,6 +11,17 @@ paths:
 ---
 
 # Playground mode (`playground`, beta)
+
+- **Its own pipeline (Nov 11 2026):** a new Explorer page runs in `server/explainer/modes/explorer/`:
+  - `pipeline.py`: the run
+  - `stream.py`: playgrounds started while the outline streams, marks, cap, repeat check
+  - `playground.py`: one section's spec, checker, repairs, look check
+  - `judge.py`: Jev's gate and review
+  - `settings.py`
+  Shared steps come from `modes/common.py`. These are copies of the playground path in `codelab.py`/`labplan.py`/`pipeline.py` with the other modes' branches removed, and they never import those files (`server/tests/test_modes_boundary.py`).
+  - **A change to how an Explorer playground is built, checked, edited or reviewed goes in `modes/explorer/`** (new pages) and `modes/followup/playground_edit.py` (v3 follow-up edits/adds, which use `modes/explorer/` too). `codelab.py`/`codelab_edit.py` now serve only the legacy paths (other modes, Add section, Explorer 2.0, `MODES_SPLIT=0`).
+  - `server/tests/test_modes_same_output.py` checks the old and new paths make the same page. Once they're meant to differ, drop its Explorer cases.
+  - `MODES_SPLIT=0` sends new pages and follow-ups back to `pipeline.generate`.
 
 - Uses Code Lab 7.0's cap and repeat check, but its **own writer note and gate** (Oct 30): `PLANNER_NOTE_PG` (any interactive part, with `kind` quantity/process/compare/**structure**; `mark_hint` leads the hint with the kind) and `PG_GATE_QUESTIONS` (adds a "structure" question; `gate_one(playground=True)`). Code Lab 7.0 keeps `PLANNER_NOTE_4` / `GATE_QUESTIONS`. Before this, structure sections (layers, attention links, pipelines) were never marked and no playground drew a diagram.
 - `PLAYGROUND_SYSTEM` "Your views": plotted charts, diagrams and AI views are equally available and mixable; a section about connected parts must show the structure itself. Bars get labels only for named categories; the runtime also thins crowded bar labels. Each marked section gets a playground from the ai-playground experiment (`Bloging-substack/ECommerce`): Haiku writes **one JSON spec** (slider/select/toggle/button/play/chart/readout plus short JS snippets). No separate plan call; the spec's `plan` field is the plan.

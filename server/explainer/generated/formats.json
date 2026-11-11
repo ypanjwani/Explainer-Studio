@@ -470,6 +470,380 @@
   ],
   "additionalProperties": false
  },
+ "followupUnderstand": {
+  "type": "object",
+  "properties": {
+   "kind": {
+    "type": "string",
+    "enum": [
+     "change",
+     "ask",
+     "cannot",
+     "answer",
+     "new_page",
+     "revert"
+    ]
+   },
+   "sections": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "section": {
+       "type": "string"
+      },
+      "intent": {
+       "type": "string"
+      },
+      "quote": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "section",
+      "intent",
+      "quote"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "steps": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "op": {
+       "type": "string",
+       "enum": [
+        "add_section",
+        "remove_section",
+        "move_section",
+        "split_section",
+        "merge_sections",
+        "set_level",
+        "set_tone",
+        "set_length",
+        "edit_page_meta",
+        "revert"
+       ]
+      },
+      "section": {
+       "type": "string"
+      },
+      "other": {
+       "type": "string"
+      },
+      "after": {
+       "type": "string"
+      },
+      "level": {
+       "type": "string",
+       "enum": [
+        "",
+        "beginner",
+        "intermediate",
+        "advanced"
+       ]
+      },
+      "what": {
+       "type": "string"
+      },
+      "quote": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "op",
+      "section",
+      "other",
+      "after",
+      "level",
+      "what",
+      "quote"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "question": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string"
+     },
+     "options": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "label": {
+         "type": "string"
+        },
+        "sections": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "section": {
+            "type": "string"
+           },
+           "intent": {
+            "type": "string"
+           },
+           "quote": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "section",
+           "intent",
+           "quote"
+          ],
+          "additionalProperties": false
+         }
+        },
+        "steps": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "op": {
+            "type": "string",
+            "enum": [
+             "add_section",
+             "remove_section",
+             "move_section",
+             "split_section",
+             "merge_sections",
+             "set_level",
+             "set_tone",
+             "set_length",
+             "edit_page_meta",
+             "revert"
+            ]
+           },
+           "section": {
+            "type": "string"
+           },
+           "other": {
+            "type": "string"
+           },
+           "after": {
+            "type": "string"
+           },
+           "level": {
+            "type": "string",
+            "enum": [
+             "",
+             "beginner",
+             "intermediate",
+             "advanced"
+            ]
+           },
+           "what": {
+            "type": "string"
+           },
+           "quote": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "op",
+           "section",
+           "other",
+           "after",
+           "level",
+           "what",
+           "quote"
+          ],
+          "additionalProperties": false
+         }
+        }
+       },
+       "required": [
+        "label",
+        "sections",
+        "steps"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "required": [
+     "text",
+     "options"
+    ],
+    "additionalProperties": false
+   },
+   "reason": {
+    "type": "string"
+   },
+   "alternative": {
+    "type": "object",
+    "properties": {
+     "label": {
+      "type": "string"
+     },
+     "sections": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "section": {
+         "type": "string"
+        },
+        "intent": {
+         "type": "string"
+        },
+        "quote": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "section",
+        "intent",
+        "quote"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "steps": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "op": {
+         "type": "string",
+         "enum": [
+          "add_section",
+          "remove_section",
+          "move_section",
+          "split_section",
+          "merge_sections",
+          "set_level",
+          "set_tone",
+          "set_length",
+          "edit_page_meta",
+          "revert"
+         ]
+        },
+        "section": {
+         "type": "string"
+        },
+        "other": {
+         "type": "string"
+        },
+        "after": {
+         "type": "string"
+        },
+        "level": {
+         "type": "string",
+         "enum": [
+          "",
+          "beginner",
+          "intermediate",
+          "advanced"
+         ]
+        },
+        "what": {
+         "type": "string"
+        },
+        "quote": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "op",
+        "section",
+        "other",
+        "after",
+        "level",
+        "what",
+        "quote"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "required": [
+     "label",
+     "sections",
+     "steps"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "required": [
+   "kind",
+   "sections",
+   "steps",
+   "question",
+   "reason",
+   "alternative"
+  ],
+  "additionalProperties": false
+ },
+ "pageIndex": {
+  "type": "object",
+  "properties": {
+   "sections": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "introduces": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "uses": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "refersTo": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "claims": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "playgroundLevel": {
+       "type": "string",
+       "enum": [
+        "",
+        "beginner",
+        "intermediate",
+        "advanced"
+       ]
+      }
+     },
+     "required": [
+      "id",
+      "introduces",
+      "uses",
+      "refersTo",
+      "claims",
+      "playgroundLevel"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  "required": [
+   "sections"
+  ],
+  "additionalProperties": false
+ },
  "repair": {
   "type": "object",
   "additionalProperties": false,

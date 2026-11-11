@@ -45,6 +45,7 @@ from . import middleware
 from .config import Settings
 from .db import Database
 from .middleware import ApiError, Ctx
+from .modes.followup.page_index import PageIndexStore
 from .paper_cache import PaperStore
 from .routes import ai, auth, history, preferences, share
 
@@ -91,6 +92,7 @@ def create_app() -> Flask:
         "jev_key": os.environ.get("JEV_API_KEY") or None,
         "plan_effort": os.environ.get("PLAN_EFFORT") if os.environ.get("PLAN_EFFORT") in ("low", "high") else "medium",
         "paper_cache": PaperStore(db),
+        "page_index": PageIndexStore(db),
         "allow_hidden_modes": os.environ.get("ALLOW_HIDDEN_MODES") == "1",
         "allow_debug": os.environ.get("ALLOW_DEBUG") == "1",
     }

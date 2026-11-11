@@ -8,6 +8,8 @@
   POST /api/route     -> JSON {kind, usd}: does a follow-up revise the explainer above or ask for a new one?
   POST /api/followup/pick -> JSON {targets, pageWide} | {question} | {error}, + usd: the sections a typed follow-up
                          on a Playground or Quick read page changes (followup_pick.py)
+  POST /api/followup/plan -> JSON {kind: change|ask|cannot|answer|revert|off, ...} | {error}, + usd: follow-ups v3, what
+                         the follow-up asks (understand.py, FOLLOWUP_PLAN=1)
   POST /api/section   -> JSON {md, sources, searches, usd}: a section tool the reader clicked (web search)
   POST /api/formula   -> JSON {note, usd}: "Go deeper" on a formula (formula.py); the app saves the note on the page
   POST /api/feedback  -> JSON {feedbackId, plan, preference, usd}: the Feedback button (feedback.py), a plan the
@@ -26,13 +28,15 @@ from flask import Blueprint, Response, current_app, g
 from limits import parse as parse_limit
 
 from .. import data, feedback, followup_pick, history, quota, sse
+from ..modes.followup import steps  # follow-ups v3 (POST /api/followup/plan)
 from ..edit_chat import edit_turn, parse_edit
 from ..followup import parse_route, route_follow_up
 from ..formula import formula_turn, parse_formula
 from ..llm import HAIKU, friendly_error
 from ..middleware import ApiError, ctx, json_body, json_response, rate_limit, require_auth
-from ..deepen import generate_deep
-from ..pipeline import generate
+from .. import modes  # Reader and Explorer's own pipelines (new pages)
+from ..deepen import generate_deep  # legacy modes: review rounds
+from ..pipeline import generate  # legacy modes, and revise follow-ups of every mode (Stage B of the modes split)
 from ..pricing import UsageLog, price_of
 from ..requests import parse_chat, parse_generate
 from ..schemas import RECORD_ID
@@ -131,7 +135,10 @@ def generate_route() -> Response:
             # many times the allowance, so they stop once today's budget is spent (audit F07).
             deep = req["quality"] == "quality-deep" or req.get("reviewRounds")
             kw = {"jev_key": ai["jev_key"], "plan_effort": ai["plan_effort"], "paper_cache": ai["paper_cache"], "usage": usage}
-            r = generate_deep(ai["client"], req, emit, usd_budget=budget, **kw) if deep else generate(ai["client"], req, emit, **kw)
+            # A new Reader or Explorer page runs on its own pipeline (modes/); MODES_SPLIT=0 sends it back to the old one.
+            r = (generate_deep(ai["client"], req, emit, usd_budget=budget, **kw) if deep
+                 else modes.generate(ai["client"], req, emit, page_index=ai.get("page_index"), **kw) if modes.handles(req)
+                 else generate(ai["client"], req, emit, page_index=ai.get("page_index"), **kw))
             u = r["usage"]
             usd, failed = u["totalUsd"], False
             cached = sum(s["cacheRead"] for s in u["steps"])
@@ -197,6 +204,17 @@ def followup_pick_route() -> Response:
     jev_key = _ai()["jev_key"]
     return _chat_turn("followup-pick", "Too many messages at once. Please wait a minute.",
                       lambda client, req: followup_pick.handle(client, jev_key, req), followup_pick.parse_pick_request)
+
+
+@bp.post("/followup/plan")
+@require_auth
+def followup_plan_route() -> Response:
+    """Follow-ups v3 (understand.py, FOLLOWUP_PLAN=1): a typed follow-up on a Playground or Quick read page as the sections
+    it is about (with the reader's intent) and structural steps, a question, a refusal or an answer; {"kind": "off"} when the
+    flag is off. Not one of the day's explainers; its cost is recorded."""
+    ai = _ai()
+    return _chat_turn("followup-plan", "Too many messages at once. Please wait a minute.",
+                      lambda client, req: steps.handle(client, ai.get("page_index"), req), steps.parse_plan_request)
 
 
 @bp.post("/edit")

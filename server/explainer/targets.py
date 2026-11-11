@@ -287,10 +287,11 @@ LITE_EDIT_NOTE = ("This is a Quick read page: short and mostly reading. In the s
 
 
 def edit_text(ask: Ask, follow: dict, current: dict, targets: list[dict], request: str, prose_only: bool = False,
-              page_fields: bool = False, lite: bool = False) -> tuple[dict, set[str], list[str]]:
+              page_fields: bool = False, lite: bool = False, lite_note: str = "") -> tuple[dict, set[str], list[str]]:
     """(outline, changed stage ids, warnings): `current` with the text targets changed by one planner call (the change format of
     revise.py, scoped to the targets). `current` may hold real widgets; the planner sees them as placeholders and they come
-    back where their placeholders are. prose_only (a Code Lab 7.0 or Playground page, whose interactive parts are widgets): the planner
+    back where their placeholders are. lite_note: the Quick read rules to send instead of LITE_EDIT_NOTE (follow-ups v2 sends
+    LITE_REVISE_NOTE). prose_only (a Code Lab 7.0 or Playground page, whose interactive parts are widgets): the planner
     writes explanation only, as for a new page of those modes, and any prebuilt interactive block it writes anyway is dropped from the
     stages it changed. On any failure: (current, set(), [a warning]) - nothing changes."""
     compact = ce.viewed(current)
@@ -299,7 +300,7 @@ def edit_text(ask: Ask, follow: dict, current: dict, targets: list[dict], reques
     if prose_only:
         req += "\n\n" + PLANNER_NOTE
     if lite:
-        req += "\n\n" + LITE_EDIT_NOTE
+        req += "\n\n" + (lite_note or LITE_EDIT_NOTE)
     allowed = {t["stage"] for t in targets if t["part"] != "new-section"}
     new_stages = sum(1 for t in targets if t["part"] == "new-section")
     scoped: list[str] = []
@@ -365,7 +366,7 @@ def _run_edits(client, usage, jev_key, outline, jobs: list[tuple[int, int, str]]
 
 def apply_targets(client: anthropic.Anthropic, usage: UsageLog, jev_key: str | None, follow: dict, base: dict, targets: list[dict],
                   request: str, ask: Ask, effort: str = "medium", think: bool = True, quality: str | None = None, prose_only: bool = False,
-                  page_fields: bool = False) -> dict:
+                  page_fields: bool = False, lite_note: str = "") -> dict:
     """{"outline", "warnings", "revision": {"changed", "removed", "widgets"}}: the page with just the targets changed.
     base: the previous outline as the follow-up carries it (widgets as placeholders); follow["widgets"] holds the real ones."""
     warnings: list[str] = []
@@ -386,7 +387,7 @@ def apply_targets(client: anthropic.Anthropic, usage: UsageLog, jev_key: str | N
         if removed < len(gone):
             warnings.append("Couldn't remove every section asked for: a page needs at least one.")
     if text_targets:
-        current, text_changed, w = edit_text(ask, follow, current, text_targets, request, prose_only, page_fields, lite)
+        current, text_changed, w = edit_text(ask, follow, current, text_targets, request, prose_only, page_fields, lite, lite_note)
         warnings += w
 
     # 1. widgets that exist: changed side by side; the page keeps the old one when a change fails
@@ -428,7 +429,7 @@ def apply_targets(client: anthropic.Anthropic, usage: UsageLog, jev_key: str | N
             lesson = str((plan or {}).get("lesson") or "")
             fixes.append({"part": "text", "stage": sid, "after": "", "what": f"Make the text match the interactive part: {why}." + (f" The interactive part teaches: {lesson}" if lesson else "")})
     if fixes:
-        current, more, w = edit_text(ask, follow, current, fixes, request, prose_only, lite=lite)
+        current, more, w = edit_text(ask, follow, current, fixes, request, prose_only, lite=lite, lite_note=lite_note)
         text_changed |= more
         warnings += w
     back = []

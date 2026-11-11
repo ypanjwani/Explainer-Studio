@@ -8,7 +8,13 @@
 // Before accounts existed, history lived only in the browser ("explainer-studio" database);
 // legacyRecords()/importLegacy() move it into the account once.
 
-import type { ExplainerSpec, GenerateRequest, PickOption, ProgressStep, SectionResponse, Usage } from "../../../shared/spec";
+import type { ExplainerSpec, FollowUpPlan, GenerateRequest, PickOption, PlanOption, ProgressStep, SectionResponse, Usage } from "../../../shared/spec";
+
+/** Follow-ups v3: what the reader is asked before a plan runs (ExplainerRecord.plan). */
+export type PlanState =
+  | { kind: "ask"; question: { text: string; options: PlanOption[] } }
+  | { kind: "confirm"; plan: FollowUpPlan; summary: string[] }
+  | { kind: "cannot"; reason: string; alternative: PlanOption | null };
 import { ApiError, apiJSON } from "../auth";
 import type { ChatMsg } from "../render/chatbot";
 import type { Progress } from "../render/explainer";
@@ -31,6 +37,15 @@ export interface ExplainerRecord {
   status: "deciding" | "asking" | "picking" | "generating" | "done" | "error";
   /** "picking": the question the reader is asked when the request could mean quite different changes. */
   pick?: { question: { text: string; options: PickOption[] } };
+  /**
+   * Follow-ups v3, "picking": what /api/followup/plan answered and the reader still has to act on: a question (options +
+   * "add detail"), a plan to confirm (big or destructive changes), or a request the page can't do (with an alternative).
+   */
+  plan?: PlanState;
+  /** Follow-ups v3: a reply in the thread ("done" with no spec, not a new version): an answer to a question, or "checked, nothing needed changing". */
+  answer?: string;
+  /** Follow-ups v3, "Undo": this version is a copy of version `reverted` (no AI call). */
+  reverted?: number;
   /** Conversation: the id of its first record (absent = this record starts its own conversation). */
   thread?: string;
   /** A follow-up in a conversation: a new version of `baseId`, or a related new explainer after it. add: made with "Add section". */

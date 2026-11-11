@@ -7,6 +7,7 @@ import { LIMITS, type GenEffort, type Quality } from "../../../shared/spec";
 import type { ExtractedPaper } from "../pdf";
 import { h } from "../render/dom";
 import { isDark } from "./mode";
+import { DEFAULT_MODE, MODES, modeInfo, modeName } from "./modes";
 
 /** Level, How hands-on and Review rounds in Options. Hidden for v1 (only Effort, Thinking, Page colours); the code stays. */
 const MORE_OPTIONS = false;
@@ -202,11 +203,9 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     //   ["freeform-plus", "Creative", "Every interactive part is custom-built for the topic. More playful."],
     //   ["code-lab-7", "Code Lab 7.0 (beta)", "A deep page with interactive parts written from scratch for each section (at most 4), designed freely like Creative's, then tested and reviewed. Costs more."],
     //   ["playground-2", "Playground 2.0 (beta)", "Like Playground, but a judge model first picks which parts each playground has (controls, charts, diagrams), then they are built, tested and reviewed."],  (hidden Nov 5 2026, maybe v2)
-    label: "Generation mode", key: "quality", fallback: "playground", onChange: () => drawOptions(),
-    options: [
-      ["lite-plus", "Reader", "A short page to read, with charts at fixed values. The fastest."],
-      ["playground", "Explorer", "A deep page where up to 4 sections get a hands-on playground: drag, click, play and watch it react. Tested and reviewed."],
-    ],
+    // The menu's modes and what each offers are in modes.ts.
+    label: "Generation mode", key: "quality", fallback: DEFAULT_MODE, onChange: () => drawOptions(),
+    options: MODES.map((m) => [m.id, m.name, m.description] as const),
   });
   const effort = segmented<GenEffort>({
     label: "Effort", key: "effort", fallback: "medium", onChange: () => drawOptions(),
@@ -246,8 +245,7 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     h("div.cmp-opt-head", null, h("span.cmp-opt-label", null, "Review rounds"), roundsHint), rounds.el,
     h("p.cmp-opt-note", null, "Each round checks the page and fixes what it finds, and stops early once it's clean. More rounds: slower, costs more."));
   // Not Quick read (a short static page), nor Code Lab 1-3. Code Lab 4.0, 5.0 and 6.0 can: their interactive parts are kept through each round.
-  const isCodeLab = () => mode.value() === "code-lab" || mode.value() === "code-lab-2" || mode.value() === "code-lab-3" || mode.value() === "code-lab-7" || mode.value() === "playground" || mode.value() === "playground-2";
-  const noRounds = () => mode.value() === "lite-plus" || (isCodeLab() && mode.value() !== "code-lab-7" && mode.value() !== "playground" && mode.value() !== "playground-2");
+  const noRounds = () => !modeInfo(mode.value())?.reviewRounds;
   const roundsCount = () => (noRounds() ? 0 : rounds.value() === "max" ? 10 : Number(rounds.value()));
 
   // Thinking (Code Lab 2.0 to 6.0): whether Haiku thinks before planning each chart or interactive part (2.0-4.0: also repairs and backups;
@@ -264,7 +262,7 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
   const thinkingRow = h("div.cmp-opt", null,
     h("div.cmp-opt-head", null, h("span.cmp-opt-label", null, "Thinking"), thinkingHint), thinking.el,
     h("p.cmp-opt-note", null, "Off costs about 40% less and is faster. On can keep a few more charts."));
-  const isChartLab = () => mode.value() === "code-lab-2" || mode.value() === "code-lab-3" || mode.value() === "code-lab-7" || mode.value() === "playground" || mode.value() === "playground-2";
+  const isChartLab = () => !!modeInfo(mode.value())?.thinking;
 
   // Page colours: stamped on the page, so it opens and exports in it. First time = what the app shows now.
   const colors = segmented<"light" | "dark">({
@@ -298,7 +296,7 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     thinkingRow.classList.toggle("is-off", !isChartLab());
     thinkingHint.textContent = isChartLab() ? "Think before planning and building interactive parts" : "Only for Explorer";
     roundsRow.classList.toggle("is-off", noRounds());
-    roundsHint.textContent = noRounds() ? `Not for ${isCodeLab() ? "Code Lab 1–3" : "Reader"}` : "Extra checking after the page";
+    roundsHint.textContent = noRounds() ? `Not for ${modeName(mode.value()) ?? "this mode"}` : "Extra checking after the page";
   }
   const outside = (e: Event) => { if (!pop.contains(e.target as Node) && !optBtn.contains(e.target as Node)) setPop(false); };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setPop(false); optBtn.focus(); } };

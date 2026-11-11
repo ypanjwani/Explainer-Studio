@@ -42,6 +42,7 @@ def capture_generate(monkeypatch) -> list[dict]:
                 "rejected": ["w"], "versions": ["v"]}
     monkeypatch.setattr(ai, "generate", generate)
     monkeypatch.setattr(ai, "generate_deep", generate)
+    monkeypatch.setattr(ai.modes, "generate", generate)  # Reader and Explorer's own pipelines
     return seen
 
 

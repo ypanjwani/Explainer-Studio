@@ -10,6 +10,7 @@ paths:
 # Quick Read mode (`lite-plus`)
 
 - Fast and the cheapest mode: a short, mostly-reading page with charts at fixed values.
+- **Its own pipeline (Nov 11 2026):** a new Reader page runs in `server/explainer/modes/reader.py`, with shared steps from `modes/common.py`. It is a copy of Reader's path through `pipeline.py` and never imports another mode's code (`server/tests/test_modes_boundary.py`). Its v3 follow-ups run in `modes/followup/` (`run.py`); a revise follow-up without a v3 plan still goes through `pipeline.py` (legacy). `test_modes_same_output.py` checks both paths make the same page; `MODES_SPLIT=0` sends new pages back to the old path.
 - **Planning:** its own short prompt (`LITE_SYSTEM`) in the compact format, with `LITE_BUDGET`.
 - **Jev:** Jev's page brief runs (level, theme), without the random-process check.
 - **Blocks dropped:** after planning, the page loses quizzes, reveal/predict, worked examples, flip cards, experiments, sampling and training blocks (`LITE_DROPPED` in `shared/spec.ts`).

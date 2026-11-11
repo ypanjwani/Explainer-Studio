@@ -5,7 +5,7 @@
 
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import { Design } from "../shared/spec";
+import { Design, PLAN_OPS } from "../shared/spec";
 
 /** Code Lab mode, step 2: one section's interaction plan, written before the code (CODE_LAB_PLAN_SYSTEM, server/explainer/codelab.py). */
 const CODE_LAB_PLAN = {
@@ -231,6 +231,77 @@ export const FORMATS = {
       additionalProperties: false,
     };
   })(),
+  /** Follow-ups v3 (UNDERSTAND_SYSTEM, server/explainer/understand.py): sections + intents and structural steps, a question, a refusal, an answer. */
+  followupUnderstand: (() => {
+    const step = {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: [...PLAN_OPS] },
+        section: { type: "string" },
+        other: { type: "string" },
+        after: { type: "string" },
+        level: { type: "string", enum: ["", "beginner", "intermediate", "advanced"] },
+        what: { type: "string" },
+        quote: { type: "string" },
+      },
+      required: ["op", "section", "other", "after", "level", "what", "quote"],
+      additionalProperties: false,
+    };
+    const intent = {
+      type: "object",
+      properties: { section: { type: "string" }, intent: { type: "string" }, quote: { type: "string" } },
+      required: ["section", "intent", "quote"],
+      additionalProperties: false,
+    };
+    const option = {
+      type: "object",
+      properties: { label: { type: "string" }, sections: { type: "array", items: intent }, steps: { type: "array", items: step } },
+      required: ["label", "sections", "steps"],
+      additionalProperties: false,
+    };
+    return {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["change", "ask", "cannot", "answer", "new_page", "revert"] },
+        sections: { type: "array", items: intent },
+        steps: { type: "array", items: step },
+        question: {
+          type: "object",
+          properties: { text: { type: "string" }, options: { type: "array", items: option } },
+          required: ["text", "options"],
+          additionalProperties: false,
+        },
+        reason: { type: "string" },
+        alternative: option,
+      },
+      required: ["kind", "sections", "steps", "question", "reason", "alternative"],
+      additionalProperties: false,
+    };
+  })(),
+  /** Follow-ups v3 (INDEX_SYSTEM, server/explainer/page_index.py): the page map's AI part. */
+  pageIndex: {
+    type: "object",
+    properties: {
+      sections: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            introduces: { type: "array", items: { type: "string" } },
+            uses: { type: "array", items: { type: "string" } },
+            refersTo: { type: "array", items: { type: "string" } },
+            claims: { type: "array", items: { type: "string" } },
+            playgroundLevel: { type: "string", enum: ["", "beginner", "intermediate", "advanced"] },
+          },
+          required: ["id", "introduces", "uses", "refersTo", "claims", "playgroundLevel"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["sections"],
+    additionalProperties: false,
+  },
   /** Fact check: Haiku's verdict and fixes for flagged claims. */
   repair: {
     type: "object", additionalProperties: false, required: ["results"],

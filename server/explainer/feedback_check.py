@@ -99,7 +99,8 @@ def _put(outline: dict, sid: str, st: dict) -> dict:
 
 
 def check(client: anthropic.Anthropic, usage: UsageLog, jev_key: str | None, follow: dict, base: dict, result: dict,
-          targets: list[dict], said: str, ask: Ask, apply: Callable[..., dict], feedback_id: str = "") -> dict:
+          targets: list[dict], said: str, ask: Ask, apply: Callable[..., dict], feedback_id: str = "",
+          again: str = "Send feedback again") -> dict:
     """result (targets.apply_targets' {"outline", "warnings", "revision"}) with each changed section checked: kept, changed
     once more, or put back as it was. apply: apply_targets with the pipeline's settings bound (targets, then the rest)."""
     outline, warnings = result["outline"], list(result["warnings"])
@@ -158,7 +159,7 @@ def check(client: anthropic.Anthropic, usage: UsageLog, jev_key: str | None, fol
             doubt = why_of([k for k in failed2 if k != "not_worse"]) or why_of([k for k in failed if k != "not_worse"])
             outline = _put(outline, sid, keep)
             warnings.append(f'Changed "{label}" as you asked, but it may not fully fix it ({doubt}). '
-                            "Send feedback again if it still looks wrong.")
+                            f"{again} if it still looks wrong.")
             summary[sid] = "kept-unsure"
             continue
         why2 = why_of(failed2)

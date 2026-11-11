@@ -9,6 +9,7 @@ Tables:
   user_preferences a reader's saved preferences (Feedback), added to the planner for that reader's pages only
   feedback        each Feedback message and what it became (a page change request and/or a preference)
   paper_cache     a paper's section filter and summaries, keyed by a hash of its text, shared by every user
+  page_index      a page's map for follow-ups v2 (page_index.py), keyed by a hash of the page
   shares          a public "Share link" (/s/<id>): a copy of one explainer's spec, one per (user, record)
 
 Schema changes go through Alembic (server/migrations); tests build the tables with create_all.
@@ -154,6 +155,16 @@ class PaperCache(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[dict[str, Any]] = mapped_column(JSON)
     hits: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+    used_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+
+
+class PageIndex(Base):
+    """Follow-ups v3 (page_index.py): a page's map, keyed by a hash of its JSON. Holds only what the page already says,
+    so it is shared like paper_cache; unused entries are pruned after 30 days."""
+    __tablename__ = "page_index"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
     used_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
 

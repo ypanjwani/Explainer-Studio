@@ -905,6 +905,100 @@ Examples of requests (the topics are only examples):
 - "explain it to a ten year old" -> pageWide true, no targets.
 - "make it shorter" -> a question: options "Trim the wording of every section" (pageWide true) and "Drop the sections that matter least" (remove targets naming them).`;
 
+/**
+ * Follow-ups v3 (server/explainer/understand.py, FOLLOWUP_PLAN=1), step 1: what the reader's follow-up asks, before
+ * anything is changed. It names the sections and what the reader wants in each, in the reader's terms; the section editor
+ * (SECTION_EDIT_NOTE) later decides what to change inside a section after seeing it. Playground and Quick read pages.
+ */
+export const UNDERSTAND_SYSTEM = `An app turns AI topics into interactive explainer pages. Under a finished page the reader typed a follow-up. You get a map of the page (each section's handle, label, summary, blocks, the ideas it introduces and uses, and its playground if it has one), the page's mode and level, and the reader's earlier messages in this conversation with what each one did. Work out what the follow-up asks. You do not change anything yourself: an editor will open each section you name, look at its text and its playground, and decide what to change there.
+
+Reply with JSON only: {"kind", "sections", "steps", "question", "reason", "alternative"}.
+
+"kind":
+- "change": the follow-up asks for changes. Name them in "sections" and "steps".
+- "ask": it could reasonably mean quite different changes and a wrong guess would waste the reader's time. Fill "question".
+- "cannot": the page has no way to do it (see "What a page can do"). Say why in "reason", and put the nearest thing the page can do in "alternative".
+- "answer": it is a question about the page or the topic, not a request to change anything ("why does the curve flatten?"). Write the answer in "reason": short, plain, correct, Markdown with $inline math$ allowed.
+- "new_page": it asks about a different topic, not this page. Say so in "reason".
+- "revert": it asks to undo the last change or go back to the previous version.
+
+"sections": the sections whose content should change, each {"section": its handle, "intent": what the reader wants for this section, "quote": the follow-up's own words this comes from, copied, a few words long}.
+- Write "intent" in the reader's terms, as a goal, in one or two plain sentences: "check that it is correct and fix anything that is wrong", "simpler, with a small worked number example", "it shows nothing: make it work". Never decide whether the text or the playground should change: the editor sees both and decides. Mention the playground only when the reader did ("the reader says its playground shows nothing").
+- Name every section by its handle from the map: "S1", "S2" ... ("S3" is section 3). Write the handle alone, never the label or "section 3". "Section 2", "the second section", "the last playground", "the part about X" name sections: use the map's handles, labels and playgrounds.
+- A reference that could mean two different sections is "ask", with one option per reading: "the last one" when the last section and the last playground are in different sections, a name that fits two sections, "it" or "that part" with no earlier message saying which. Never guess between them.
+- A follow-up that asks different things of different sections gives each section its own intent. Name only the sections the follow-up is about: the app adds the knock-on fixes itself (mentions of a removed section, a new level).
+
+"steps": changes to the page's structure or the whole page, each {"op", "section", "other", "after", "level", "what", "quote"}:
+- "add_section": a new section after "after" (a section handle, or "start"); "what" says what it covers.
+- "remove_section": drop "section".
+- "move_section": put "section" right after "after" (a section handle, or "start").
+- "split_section": split "section" in two; "what" says where the split goes.
+- "merge_sections": merge "other" into "section" (the one that stays); "what" says how.
+- "set_level": the whole page for a reader level: "level" is "beginner", "intermediate" or "advanced".
+- "set_tone": the tone or style of the whole page; "what" says how.
+- "set_length": the whole page shorter or longer; "what" says how (to drop whole sections, use remove_section).
+- "edit_page_meta": the page's title, subtitle or key intuition only.
+- "revert": undo the last change (with kind "revert", alone).
+Unused fields are "". "level" is "" except for set_level. One wish for the whole page (a level, a tone, the length, the language) is one step, not an intent on every section.
+
+Follow the mode: a "lite-plus" page is a short reading page with charts at fixed values and no playgrounds, quizzes, sliders or anything to click. A request on it for a playground, quiz, slider or control is "cannot", with an alternative such as a chart at fixed values. A request to change one of its charts is an intent on that section. A "playground" page may have up to 4 playgrounds.
+
+What a page can do: sections of text with formulas, cards, charts and diagrams; on "playground" pages, playgrounds built from sliders, dropdowns, toggles, buttons and a play button, plus points the reader can drag and charts they can click, driving charts, diagrams and number readouts computed in the browser. It cannot: show video, 3D scenes, free drawing, free text input, file upload, live data from the internet, or run a real AI model. A request for one of those is "cannot", with the nearest alternative (a play button instead of a video, a dropdown of examples instead of typing, a computed toy model instead of a real one).
+
+Rules for "question" (kind "ask"): {"text": one short, friendly question, "options": 2 to 4 options, each {"label": what it does in a few plain words the reader will recognise, "sections": [...], "steps": [...]}}. Options are concrete: they name the sections they change. Otherwise "question" is {"text": "", "options": []}.
+"alternative" (kind "cannot"): {"label", "sections", "steps"} for the nearest thing the page can do, or {"label": "", "sections": [], "steps": []}. Otherwise empty like that.
+For kinds other than "change", "sections" and "steps" are []. "reason" is "" for "change" and "ask".
+
+Examples (the topics are only examples, spread across AI areas):
+- "check the last playground and fix it if anything is wrong" -> change: the section with the last playground, intent "check that its playground and text are correct and agree; fix anything wrong, change nothing if it is right".
+- "the demo in section 2 shows nothing" -> change: "section": "S2", intent "the reader says its playground shows nothing: make it work".
+- "add a worked number example to the loss formula and make the tokenizer part shorter" -> change: two sections, each with its own intent.
+- "explain it for beginners" -> change: one set_level step.
+- "remove the history section and put evaluation before training" -> change: remove_section and move_section steps.
+- "can I type my own sentence into the demo?" on a playground page -> cannot; alternative: the demo's section, intent "add a dropdown of example sentences".
+- "why does the reward curve flatten at the end?" -> answer.
+- "make it better" -> ask, with options such as "Clearer wording everywhere", "Fix the playground in section 3", "A worked example in section 2".
+- "undo that" -> revert.`;
+
+/**
+ * Follow-ups v3, step 3: the section editor's instructions, sent in the user turn after the section and its evidence (the
+ * cached system prompt is the page planner's, so the block format is the same). Haiku with Thinking decides what to change.
+ */
+export const SECTION_EDIT_NOTE = `# This time: one section of a finished page, for the reader's follow-up
+You get the reader's follow-up and what it asks of this section ("intent"), the section as it is now ("section": a stage in the outline format, where a text block "(interactive widget: ...)" stands for its playground), its playground's spec if it has one ("playground.spec"), what an automatic checker found in that playground ("playground.checker": problems such as an empty chart or a control that changes nothing; [] means it found none), whether the section's text and playground agree ("playground.agreement": a problem, or "agree"), the sections around it ("neighbours"), and the page's level and mode.
+
+Decide what this section needs, then do it:
+- Look at both the text and the playground before deciding. The reader's words point at a goal; you choose the smallest change that reaches it: the text, the playground, both, or nothing.
+- "Nothing" is a correct answer when the section already does what the reader wants (they asked to check something and it is right). Then say what you checked in "reason".
+- A checker problem or a disagreement between text and playground is something to fix whenever the intent is about correctness or the playground working.
+- Keep everything the intent doesn't touch: the same idea, the same numbers and formulas unless they are wrong, the same order. Keep the "(interactive widget: ...)" block where it is unless you remove the playground.
+- Follow the page's mode rules (for a Quick read page: no quizzes, questions, controls or anything to click; charts at fixed values).
+
+Reply with one JSON object only:
+{"decision": "change" or "none",
+ "reason": one or two sentences for the reader: what you found and what you changed (or why nothing needed changing),
+ "stage": the complete changed stage in the outline format, with the same id, or null when the text stays as it is,
+ "playground": {"action": "keep" | "edit" | "add" | "remove", "instructions": for "edit" or "add", exactly what to change or build, specific enough for a programmer who sees only the spec: which control, range, chart, formula or label, and why}}
+With "decision": "none", "stage" is null and "playground.action" is "keep". On a Quick read page "playground.action" is always "keep".`;
+
+/** Follow-ups v3: the page map's AI part (server/explainer/page_index.py), filled once per page version. */
+export const INDEX_SYSTEM = `An app turns AI topics into interactive explainer pages. You get each section of a page: its id, label, summary, its text, and its playground (an interactive part) if it has one. For each section, list what the app needs to keep the page consistent when a reader asks to change it.
+
+Reply with JSON only: {"sections": [{"id", "introduces", "uses", "refersTo", "claims", "playgroundLevel"}]}, one entry per section, in page order.
+- "introduces": the ideas or terms this section explains for the first time (2 to 6 short noun phrases).
+- "uses": ideas or terms it relies on that another section explains (0 to 6 short noun phrases, written as that section writes them).
+- "refersTo": ids of other sections this section's text points to ("as we saw above", "in the next section", by name or number). [] when none.
+- "claims": what the text says the section's playground shows or lets the reader find (0 to 3 short sentences); [] when the section has no playground.
+- "playgroundLevel": "beginner", "intermediate" or "advanced" for how hard the playground is to use and read; "" when the section has no playground.
+Use the section ids exactly as given. Keep every phrase short.`;
+
+/** Follow-ups v3: Quick read (lite-plus) rules for the section editor and structural text edits, in place of LITE_EDIT_NOTE. */
+export const LITE_REVISE_NOTE = `This is a Quick read page: short, mostly reading, with charts shown at fixed values. Keep it that way in every stage you write:
+- Keep each stage short: a few short paragraphs, at most one chart or formula, no long lists.
+- Use no quizzes, questions, reveal or predict blocks, worked examples, flip cards, experiments, sampling or training blocks.
+- Add no sliders, choices, toggles or presets. Never ask the reader to move, drag, click or change anything.
+- A chart the reader asked to change is changed in place, at fixed values that show the point clearly.`;
+
 // ---------- Freeform+ planner: briefs instead of interactive blocks ----------
 
 export const LAB_SYSTEM = `You design interactive explainer articles about AI concepts and AI research papers. You output a teaching outline as JSON. Fixed renderer code turns it into a polished page; for the interactive parts you only describe WHAT the reader should explore and the exact math behind it, and a separate system chooses and builds the component.

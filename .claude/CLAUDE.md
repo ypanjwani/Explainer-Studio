@@ -44,7 +44,22 @@ From `explainer-studio/`:
 ## Architecture essentials
 
 - Pages render from a JSON spec using prebuilt components. The only AI-written code is Playground's sandboxed-iframe widget (one JSON spec per part, run by `shared/playground/`).
-- Generation is a fixed pipeline (summarize, plan, assemble, check), not an agent (`server/explainer/pipeline.py`).
+- Generation is a fixed pipeline (summarize, plan, assemble, check), not an agent.
+  - **Reader and Explorer have their own pipelines** (Nov 11 2026): `server/explainer/modes/` (`reader.py`, `explorer/`, shared steps in `common.py`), chosen in `routes/ai.py` (`modes.handles`).
+  - **Rule:** nothing under `modes/` imports another mode's code. It may use only shared tools: `llm`, `jev`, `data`, `core/`, `brief`, `design`, `clarity`, `factcheck`, `notes`, `filter`, `paper_cache`, `db`, …. `server/tests/test_modes_boundary.py` enforces this, so every other mode can be deleted later without touching these two.
+  - **Their v3 follow-ups have their own path too** (Nov 11 2026): `server/explainer/modes/followup/`.
+    - Moved there: `understand.py`, `steps.py`, `section_editor.py`, `page_index.py`.
+    - Copied there: `run.py`, `playground_edit.py`, `targets.py`, `revise.py`, `check.py`, `cards.py`, from `pipeline.py`/`codelab_edit.py`/`targets.py`/`revise.py`/`feedback_check.py`/`feedback_pick.py`/`followup_pick.py`.
+    - Playground edits use Explorer's own builder (`modes/explorer/`).
+  - **Legacy, to be deleted with the other modes:** every other mode, "Add section", the hidden Feedback button, review rounds, and a revise follow-up without a v3 plan (an old tab, a script) still run on `server/explainer/pipeline.py` + `codelab.py`. Their route lines are marked `# legacy`.
+  - **Deleting them later:** a rehearsal (Nov 11 2026: old modes deleted in a copy) showed Reader/Explorer pages and v3 follow-ups keep working once these are removed:
+    - the legacy lines in `routes/ai.py`
+    - `ROUNDS_CEILING` in `requests.py` (from `deepen.py`)
+    - `routes/preferences.py` and the preferences loading in `/api/generate` (both use `feedback.py`)
+
+    Tests to move rather than delete then: `test_playground.py` (onto `modes/explorer/`), `test_retry.py`/`test_section.py` (helpers now in `modes/common.py`), `test_server.py` (split). `core/lab.py` goes together with `shared/lab.ts` and its parity test.
+  - `MODES_SPLIT=0` sends Reader/Explorer back to `pipeline.py` for everything.
+  - The composer's modes are in `app/src/shell/modes.ts`.
 - Validation and math exist twice: TypeScript (`shared/`, `prompts/`) and a Python port (`server/explainer/core/`), kept identical by generated JSON plus parity tests. **Never edit `server/explainer/generated/` by hand**; run `npm run export:server`.
 - Always sanitize model output (DOMPurify) and escape user/document text before HTML.
 - Per-user rate limits and daily cost caps protect the API budget.
@@ -95,6 +110,8 @@ Other modes' code still exists and Playground reuses parts of it (the Code Lab m
 ## Follow-ups (file map in `.claude/rules/followup.md`)
 
 **To explore or change follow-ups, start with `.claude/followup-planning.md` only.** It explains the problem, the architecture and why, the workflow, decisions and future work. Then use `.claude/rules/followup.md` for the file map.
+
+**Follow-ups v3 (Nov 9 2026; on by default since Nov 11 2026, `FOLLOWUP_PLAN=0` turns it off; code in `server/explainer/modes/followup/`; design `.claude/followup-v3-plan.md`):** on Playground and Quick read pages a first call (`understand.py`, `POST /api/followup/plan`) reads the follow-up against a cached page map and the conversation: it names the sections and what the reader wants in each (never text vs playground), plus typed structural steps (add/remove/move/split/merge a section, level, tone, length, title, undo), or asks (options + "Add detail"), refuses with the nearest alternative, or answers. Then a section editor (`section_editor.py`, Haiku + Thinking) looks at each section's text, playground spec, checker problems and text-playground agreement and decides what to change (text, playground, both, or nothing with a reason). Code does the structure and knock-on fixes, Jev checks each changed section (undone alone if it fails), and "checked, nothing needed changing" is a reply, not an error. If the plan call fails, the app shows the error with "Try again" (no fallback). The section pick below runs only with `FOLLOWUP_PLAN=0` (legacy).
 
 - **A follow-up does not rewrite the page.** `server/explainer/targets.py` (`find_targets`) names the affected parts; only those text/widget parts change, and the others are restored (`revise.restore_kept_widgets`, `guard_untouched`).
   - Playground: a playground is edited or added by `codelab_edit.py`, through the same checks as a new page.

@@ -10,12 +10,12 @@
 
 import { derivePalette } from "../../../shared/color";
 import { buildFollowUp } from "../../../shared/followup";
-import { LIMITS, PICK_MODES, formulaKey, isQuality, type ExplainerSpec, type FollowUp, type FollowUpPick, type GenerateRequest, type ProgressStep, type RouteResponse } from "../../../shared/spec";
-import { chat, ConnectionLost, formulaDeeper, generateExplainer, pickFollowUp, routeFollowUp, sectionTool, type FeedbackConfirmed } from "../api";
+import { CHECKED_PREFIX, LIMITS, PICK_MODES, formulaKey, isQuality, type ExplainerSpec, type FollowUp, type FollowUpPick, type GenerateRequest, type FollowUpPlan, type PlanOption, type PlanResponse, type ProgressStep, type RouteResponse } from "../../../shared/spec";
+import { chat, ConnectionLost, formulaDeeper, generateExplainer, pickFollowUp, planFollowUp, routeFollowUp, sectionTool, type FeedbackConfirmed } from "../api";
 import { openFeedbackDialog } from "./feedback";
 import { allowance, onAuthChange, refreshAllowance, restore, type User } from "../auth";
 import { createChat } from "../render/chatbot";
-import { h, uid } from "../render/dom";
+import { h, mdToHtml, uid } from "../render/dom";
 import { inheritState, renderExplainer, storeFor, type DrawerState } from "../render/explainer";
 import { exportHtml } from "../render/export";
 import { LINK_ICON, openShareDialog } from "./share";
@@ -26,11 +26,17 @@ import { LEVEL_CHOICES } from "../../../shared/menus";
 import { createEditPanel, type EditTarget } from "./edit";
 import { openSearchPanel, sectionText } from "./section";
 import { applyMode, isDark, loadMode, modeToggle, setRootMode } from "./mode";
+import { howLong, modeName } from "./modes";
 import { extrasQuestion, extrasSummary } from "./extras";
 import type { Extra } from "../../../shared/menus";
 
 /** ✏️ Edit chat (per-part Edit buttons + the drawer's Edit tab). Hidden in every mode until version 2; the code stays. */
 const EDIT_CHAT = false;
+/**
+ * Follow-ups v3 (server/explainer/understand.py): a revise follow-up on a Playground or Quick read page asks /api/followup/plan
+ * first. The server answers "off" unless FOLLOWUP_PLAN=1, and the app then uses /api/followup/pick as before.
+ */
+const PLAN_FOLLOWUPS = true;
 /** The Feedback button on an open explainer (feedback.ts, /api/feedback). Hidden in every mode for now; the code stays. */
 const FEEDBACK = false;
 /** "What do you want to add to each section?" (extras.ts). Hidden for v1: new explainers get no extras ("None"); the code stays. */
@@ -154,7 +160,7 @@ export class App {
       putRecord(r);
     }
     // A follow-up interrupted while its sections were being picked: ask "change it or new?" again (a saved question stays).
-    for (const r of this.records.filter((r) => r.status === "picking" && !r.pick)) {
+    for (const r of this.records.filter((r) => r.status === "picking" && !r.pick && !r.plan)) {
       r.status = "deciding";
       putRecord(r);
     }
@@ -291,7 +297,7 @@ export class App {
     const href = lastDone && latest.status === "done" ? `#/c/${lastDone.id}/x` : `#/c/${latest.id}`;
     const status = thread.some((x) => x.status === "generating") ? h("span.sb-spinner", { "aria-label": "Generating" })
       : latest.status === "error" ? h("span.sb-err", { title: "Failed" }, "!")
-      : thread.some((x) => x.status === "deciding" || x.status === "asking" || (x.status === "picking" && x.pick)) ? h("span.sb-ask", { title: "Waiting for your answer" }) : null;
+      : thread.some((x) => x.status === "deciding" || x.status === "asking" || (x.status === "picking" && (x.pick || x.plan))) ? h("span.sb-ask", { title: "Waiting for your answer" }) : null;
     const item = h("div.sb-item", { class: active ? "is-active" : "" },
       h("a.sb-item-link", { href, title: r.title }, status, h("span.sb-item-title", null, r.title)),
       h("button.sb-item-menu", { type: "button", "aria-label": `Options for ${r.title}`, "aria-expanded": String(this.menuOpen === r.id), onclick: (e: Event) => { e.stopPropagation(); this.menuOpen = this.menuOpen === r.id ? null : r.id; this.drawSidebar(); } }, icon(ICON.dots)));
@@ -452,9 +458,10 @@ export class App {
             h("button.btn-pill", { type: "button", onclick: () => this.startFollowUp(rec, "new") }, "✨ New explainer about this")));
       }
     }
-    if (rec.status === "picking") {
+    if (rec.status === "picking" && rec.plan) body.push(...this.planView(rec));
+    else if (rec.status === "picking") {
       const q = rec.pick?.question;
-      if (!q) body.push(h("p.msg-text.is-muted", null, "Finding the part of the page to change…"));
+      if (!q) body.push(h("p.msg-text.is-muted", null, PLAN_FOLLOWUPS ? "Working out what to change…" : "Finding the part of the page to change…"));
       else {
         body.push(h("p.msg-text", null, q.text),
           h("div.msg-choices", null,
@@ -467,23 +474,27 @@ export class App {
     } else if (EXTRAS_QUESTION && isQuality(rec.request.quality) && rec.request.quality && rec.request.extras && rec.status !== "deciding" && rec.status !== "picking") {
       body.push(h("p.msg-choice", null, extrasSummary(rec.request.extras)));
     }
-    if (rec.followUp && rec.status !== "deciding") {
+    if (rec.followUp && rec.status !== "deciding" && !rec.answer) {
       const what = base?.spec ? `“${base.spec.title}”` : "the explainer above";
       body.push(h("p.msg-choice", null, rec.followUp.add
         ? `➕ Version ${rec.version ?? 2}: adding a section to ${what}`
         : rec.followUp.kind === "revise"
-        ? `✏️ Version ${rec.version ?? 2}: revising ${what} (${MODE_NAME[rec.request.quality ?? "quality-plus"] ?? "Interactive"})`
+        ? `✏️ Version ${rec.version ?? 2}: revising ${what} (${modeName(rec.request.quality ?? "quality-plus") ?? "Interactive"})`
         : "✨ A new explainer that builds on this conversation"));
     }
     if (rec.replaces && rec.status === "generating") {
       const old = this.records.find((r) => r.id === rec.replaces);
       body.push(h("p.msg-choice", null, `↻ A fresh explainer, replacing “${old?.spec?.title ?? old?.title ?? "the old one"}”`));
     }
-    if (rec.status === "generating") body.push(h("p.msg-text", null, rec.replaces ? "Building a fresh explainer on the same prompt. The old one is replaced once this is ready." : isPaper ? "Reading your paper and designing an explainer. This usually takes 1–3 minutes." : rec.followUp?.add ? "Adding a section. Everything already on the page stays as it is." : rec.followUp?.kind === "revise" ? "Revising the explainer. This usually takes about a minute." : `Designing your explainer. This usually takes ${HOW_LONG[rec.request.quality ?? ""] ?? "about a minute"}.`), steps);
+    if (rec.status === "generating") body.push(h("p.msg-text", null, rec.replaces ? "Building a fresh explainer on the same prompt. The old one is replaced once this is ready." : isPaper ? "Reading your paper and designing an explainer. This usually takes 1–3 minutes." : rec.followUp?.add ? "Adding a section. Everything already on the page stays as it is." : rec.followUp?.kind === "revise" ? "Revising the explainer. This usually takes about a minute." : `Designing your explainer. This usually takes ${howLong(rec.request.quality) ?? "about a minute"}.`), steps);
     if (rec.status === "error") {
       body.push(steps, h("div.msg-error", { role: "alert" }, h("strong", null, "Something went wrong. "), rec.error ?? ""),
         h("button.btn-pill", { type: "button", onclick: () => this.retry(rec) }, "↻ Try again"));
     }
+    if (rec.status === "done" && !rec.spec && rec.answer) {
+      body.push(h("div.msg-text.msg-answer", { html: mdToHtml(rec.answer) }), h("p.msg-choice", null, "Nothing on the page was changed. Ask for a change if you'd like one."));
+    }
+    if (rec.status === "done" && rec.spec && rec.reverted) body.push(h("p.msg-choice", null, `↶ Back to version ${rec.reverted}: no AI call, nothing counted`));
     if (rec.status === "done" && rec.spec) {
       const s = rec.spec;
       body.push(
@@ -502,7 +513,17 @@ export class App {
             s.revision ? h("div.result-check", null, revisionText(s.revision)) : null,
             s.addition ? h("div.result-check", null, additionText(s)) : null,            s.factCheck ? h("div.result-check", null, s.factCheck.fixed ? `✓ Fact-checked: ${s.factCheck.fixed} correction${s.factCheck.fixed > 1 ? "s" : ""} (see below)` : "✓ Fact-checked: no issues found") : null),
           h("span.result-open", null, "Open →")));
+      const reports = s.revision?.steps;
+      if (reports?.length) {
+        const mark = { done: "✓", kept: "○", undone: "↺", skipped: "–" } as const;
+        body.push(h("details.msg-warn.msg-steps", null, h("summary", null, `What changed: ${reports.filter((x) => x.status === "done").length} of ${reports.length} steps done`),
+          h("ul", null, ...reports.map((x) => h("li", null, `${mark[x.status]} ${plain(x.label)}${x.why ? ` (${plain(x.why)})` : ""}`)))));
+      }
       if (s.warnings.length) body.push(h("details.msg-warn", null, h("summary", null, `${s.warnings.length} part(s) were fixed or skipped automatically`), h("ul", null, ...s.warnings.map((w) => h("li", null, plain(w))))));
+      // Undo: under the conversation's latest version made by a follow-up, once nothing else is running.
+      if (PLAN_FOLLOWUPS && rec.followUp?.kind === "revise" && thread.at(-1) === rec && !thread.some((r) => r.status !== "done" && r.status !== "error")) {
+        body.push(h("div.msg-choices", null, h("button.btn-pill", { type: "button", onclick: () => this.undoVersion(rec) }, "↶ Undo this change")));
+      }
       // "Add section": only under the conversation's latest explainer, and only for Quality pages.
       if (isQuality(rec.request.quality) && this.followUpBase(this.rootOf(rec)) === rec && !thread.some((r) => r.status !== "done" && r.status !== "error")) body.push(this.addSectionBox(rec));
     }
@@ -747,8 +768,8 @@ export class App {
       return;
     }
     const f = rec.request.followUp;
-    if (kind === "revise" && f?.kind === "revise" && !f.pick && rec.request.quality && PICK_MODES.includes(rec.request.quality)) {
-      this.pickFirst(rec);
+    if (kind === "revise" && f?.kind === "revise" && !f.pick && !f.plan && rec.request.quality && PICK_MODES.includes(rec.request.quality)) {
+      this.matchFirst(rec);
       return;
     }
     rec.status = "generating";
@@ -889,6 +910,167 @@ export class App {
     this.answerPick(rec, r ? { targets: r.targets, pageWide: r.pageWide } : null);
   }
 
+  /** A revise follow-up on a Playground or Quick read page: the plan first (follow-ups v2), else the section pick. */
+  private matchFirst(rec: ExplainerRecord) {
+    if (PLAN_FOLLOWUPS) this.planFirst(rec);
+    else this.pickFirst(rec);
+  }
+
+  /**
+   * Follow-ups v3 (server/explainer/understand.py): what the follow-up asks (sections + intents, structural steps). Small plans build at once; a question, a
+   * plan to confirm, or a request the page can't do waits for the reader (rec.plan). A question gets an answer in the
+   * thread (no new version). "off" (FOLLOWUP_PLAN not set) or a failed call falls back to the section pick.
+   * option (+ extra): the reader chose an option of a question or the alternative to a refusal (and added words to it).
+   */
+  private async planFirst(rec: ExplainerRecord, option?: PlanOption, extra?: string) {
+    const f = rec.request.followUp;
+    if (f?.kind !== "revise" || !rec.request.quality) return;
+    rec.status = "picking";
+    rec.pick = undefined;
+    rec.plan = undefined;
+    rec.updatedAt = Date.now();
+    putRecord(rec);
+    this.refresh(rec.id);
+    let r: PlanResponse | null = null;
+    try {
+      const history = this.historyOf(rec);
+      r = await planFollowUp({ text: rec.prompt.text, quality: rec.request.quality, followUp: f, ...(option ? { option } : {}), ...(extra ? { extra } : {}), ...(history.length ? { history } : {}) });
+    } catch (e) {
+      // No silent fallback to the old section pick: the reader sees why, and "Try again" asks again (retry → matchFirst).
+      if (rec.status !== "picking") return; // cancelled meanwhile
+      this.failFollowUp(rec, `Couldn't work out the change (${e instanceof Error ? e.message : String(e)}). Try again.`);
+      return;
+    }
+    if (rec.status !== "picking") return; // cancelled meanwhile
+    // Legacy: only when the server has v3 turned off (FOLLOWUP_PLAN=0) does the old section pick decide.
+    if (!r || ("kind" in r && r.kind === "off")) { this.pickFirst(rec); return; }
+    if ("error" in r) { this.failFollowUp(rec, r.error); return; }
+    if (r.kind === "revert") { this.revert(rec); return; }
+    if (r.kind === "answer") {
+      rec.status = "done";
+      rec.answer = r.answer;
+    } else if (r.kind === "ask") {
+      rec.plan = { kind: "ask", question: r.question };
+    } else if (r.kind === "cannot") {
+      rec.plan = { kind: "cannot", reason: r.reason, alternative: r.alternative };
+    } else if (r.kind === "change") {
+      const plan: FollowUpPlan = { sections: r.sections, steps: r.steps };
+      if (!r.confirm) { this.runSteps(rec, plan); return; }
+      rec.plan = { kind: "confirm", plan, summary: r.summary };
+    }
+    rec.updatedAt = Date.now();
+    putRecord(rec);
+    this.refresh(rec.id);
+  }
+
+  /** What the reader is asked before a plan runs: a question, a plan to confirm, or what the page can't do. */
+  private planView(rec: ExplainerRecord): HTMLElement[] {
+    const p = rec.plan!;
+    const cancel = h("button.btn-pill", { type: "button", onclick: () => this.cancelPick(rec) }, "Cancel");
+    if (p.kind === "confirm") {
+      // Summary lines follow the plan: steps, then sections. A section part the server wasn't sure the reader asked for
+      // (unsure) gets a ticked box: untick it to leave it out. An unsure step only shows its note (knock-on fixes depend on it).
+      const ticks = new Map<number, HTMLInputElement>();
+      const lines = p.summary.map((line, i) => {
+        const part = i < p.plan.steps.length ? null : p.plan.sections[i - p.plan.steps.length];
+        if (!part?.unsure) return h("li", null, plain(line));
+        const box = h("input", { type: "checkbox", checked: "", "aria-label": `Include: ${line}` }) as HTMLInputElement;
+        box.checked = true;
+        ticks.set(i - p.plan.steps.length, box);
+        return h("li.is-unsure", null, h("label", null, box, " ", plain(line)));
+      });
+      const go = () => {
+        const sections = p.plan.sections.filter((_, k) => ticks.get(k)?.checked !== false);
+        if (!sections.length && !p.plan.steps.length) { toast("Tick at least one change, or press Cancel."); return; }
+        this.runSteps(rec, { ...p.plan, sections });
+      };
+      return [h("p.msg-text", null, ticks.size ? "Here's what I'll change. Untick anything you didn't ask for, then go ahead." : "Here's what I'll change. Go ahead?"),
+        h("ul.msg-plan", null, ...lines),
+        h("div.msg-choices", null, h("button.btn-pill", { type: "button", onclick: go }, "✓ Make these changes"), cancel)];
+    }
+    if (p.kind === "cannot") {
+      const alt = p.alternative;
+      return [h("p.msg-text", null, p.reason),
+        h("div.msg-choices", null, alt ? h("button.btn-pill", { type: "button", onclick: () => this.planFirst(rec, alt) }, alt.label) : null, cancel)];
+    }
+    // A question: each option runs as it is; with words in "Add detail", the chosen option is planned again with them.
+    const detail = h("input.plan-detail", { type: "text", placeholder: "Add detail to your choice (optional)", maxlength: "300", "aria-label": "Add detail to your choice" });
+    const choose = (o: PlanOption) => this.planFirst(rec, o, detail.value.trim() || undefined);
+    return [h("p.msg-text", null, p.question.text),
+      h("div.msg-choices", null, ...p.question.options.map((o) => h("button.btn-pill", { type: "button", onclick: () => choose(o) }, o.label)), cancel),
+      detail];
+  }
+
+  /** Build the new version from this plan (FollowUp.plan). */
+  private runSteps(rec: ExplainerRecord, plan: FollowUpPlan) {
+    const f = rec.request.followUp;
+    if (rec.status !== "picking" || f?.kind !== "revise") return;
+    rec.request = { ...rec.request, followUp: { ...f, plan } };
+    rec.plan = undefined;
+    rec.status = "generating";
+    rec.updatedAt = Date.now();
+    putRecord(rec);
+    this.refresh(rec.id);
+    this.run(rec);
+  }
+
+  /** The conversation's earlier prompts with what each did, oldest first (the last 5), for /api/followup/plan. */
+  private historyOf(rec: ExplainerRecord): string[] {
+    const earlier = this.threadOf(this.rootOf(rec)).filter((r) => r.id !== rec.id && r.createdAt < rec.createdAt);
+    return earlier.slice(-5).map((r) => {
+      const what = r.answer ? "answered in the chat, nothing changed"
+        : r.status === "error" ? "failed, nothing changed"
+        : r.reverted ? `undone: back to version ${r.reverted}`
+        : r.status === "done" && r.spec ? (r.spec.revision ? `made version ${r.version ?? 1}: ${(r.spec.revision.steps ?? []).filter((x) => x.status === "done").map((x) => x.label).join("; ") || revisionText(r.spec.revision)}` : `made version ${r.version ?? 1}`)
+        : "not finished";
+      return `"${r.prompt.text.slice(0, 160)}": ${what}`.slice(0, 300);
+    });
+  }
+
+  private failFollowUp(rec: ExplainerRecord, error: string) {
+    rec.status = "error";
+    rec.error = error;
+    rec.plan = undefined;
+    rec.updatedAt = Date.now();
+    putRecord(rec);
+    this.refresh(rec.id);
+  }
+
+  /** "Undo": this record becomes a copy of the version before the one it follows. No AI call, not counted. */
+  private revert(rec: ExplainerRecord) {
+    const base = rec.followUp ? this.records.find((r) => r.id === rec.followUp!.baseId) : undefined;
+    const prevId = base?.followUp?.kind === "revise" ? base.followUp.baseId : undefined;
+    const prev = prevId ? this.records.find((r) => r.id === prevId) : undefined;
+    if (!prev?.spec) { this.failFollowUp(rec, "There's no earlier version of this page to go back to."); return; }
+    const { revision: _revision, addition: _addition, ...spec } = structuredClone(prev.spec);
+    rec.spec = { ...spec, warnings: [] };
+    rec.reverted = prev.version ?? 1;
+    rec.title = spec.title;
+    rec.plan = undefined;
+    rec.steps = {};
+    rec.status = "done";
+    rec.updatedAt = Date.now();
+    putRecord(rec);
+    this.refresh(rec.id);
+  }
+
+  /** The "Undo this change" button: a new version that goes back to the one before `latest`. */
+  private undoVersion(latest: ExplainerRecord) {
+    const f = latest.spec ? buildFollowUp("revise", latest.spec, []) : null;
+    if (!f || f.kind !== "revise") { toast("This version can't be undone."); return; }
+    const text = "Undo the last change";
+    const now = Date.now();
+    const rec: ExplainerRecord = {
+      id: uid(), title: text, createdAt: now, updatedAt: now, prompt: { text },
+      request: { ...latest.request, mode: "concept", text, followUp: f } as GenerateRequest,
+      status: "picking", steps: {}, progress: { visited: [], answers: {} }, chat: [],
+      thread: this.rootOf(latest), followUp: { kind: "revise", baseId: latest.id }, version: (latest.version ?? 1) + 1,
+    };
+    this.records.unshift(rec);
+    this.revert(rec);
+    location.hash = `#/c/${rec.id}`;
+  }
+
   /** Build the revision with the parts picked (or chosen by the reader); null = let the server's finder decide. */
   private answerPick(rec: ExplainerRecord, pick: FollowUpPick | null) {
     const f = rec.request.followUp;
@@ -905,6 +1087,7 @@ export class App {
   private cancelPick(rec: ExplainerRecord) {
     if (rec.status !== "picking") return;
     rec.pick = undefined;
+    rec.plan = undefined;
     rec.status = "error";
     rec.error = "Cancelled: nothing on the page was changed. Type what you'd like to change, or press Try again.";
     rec.updatedAt = Date.now();
@@ -1091,10 +1274,10 @@ export class App {
 
   private retry(rec: ExplainerRecord) {
     const f = rec.request.followUp;
-    if (f?.kind === "revise" && !f.pick && !f.feedback && !f.add && rec.request.quality && PICK_MODES.includes(rec.request.quality)) {
+    if (f?.kind === "revise" && !f.pick && !f.plan && !f.feedback && !f.add && rec.request.quality && PICK_MODES.includes(rec.request.quality)) {
       rec.error = undefined;
       rec.steps = {};
-      this.pickFirst(rec); // match the request to sections again (it may ask the reader)
+      this.matchFirst(rec); // match the request to the page again (it may ask the reader)
       return;
     }
     rec.status = "generating";
@@ -1119,6 +1302,10 @@ export class App {
           rec.usage = e.usage;
           rec.status = "done";
           rec.title = e.spec.title;
+        } else if (e.type === "error" && e.message.startsWith(CHECKED_PREFIX)) {
+          // Follow-ups v3: the sections were checked and found right. A reply, not an error or a new version.
+          rec.status = "done";
+          rec.answer = e.message.slice(CHECKED_PREFIX.length);
         } else if (e.type === "error") {
           rec.status = "error";
           rec.error = e.message;
@@ -1206,13 +1393,6 @@ function modeOf(s: ComposerChoices): Pick<GenerateRequest, "quality" | "reviewRo
   return { quality: s.quality === "quality-plus" ? "quality-deep" : s.quality, reviewRounds: s.reviewRounds };
 }
 
-/** Mode names as the composer shows them (retired modes in old records keep a plain name). */
-const MODE_NAME: Record<string, string> = {
-  "quality-plus": "Interactive", "quality-deep": "Interactive", "lite-plus": "Reader", "freeform-plus": "Creative", smart: "Smart", "scene-plus": "Lab", "code-lab": "Code Lab", "code-lab-2": "Code Lab 2.0", "code-lab-3": "Code Lab 3.0", "code-lab-4": "Code Lab 4.0", "code-lab-5": "Code Lab 5.0", "code-lab-6": "Code Lab 6.0", "code-lab-7": "Code Lab 7.0", playground: "Explorer", "playground-2": "Explorer 2.0",
-  quality: "Interactive", "quality-2": "Interactive", "quality-fixed": "Interactive", custom: "Interactive", lab: "Interactive",
-  economy: "Interactive", cheap: "Interactive", "compact-plus": "Interactive", freeform: "Creative",
-};
-
 /** Copies `text` right away, inside the click (navigator.clipboard can wait on a permission prompt). False if the browser refused. */
 function copyNow(text: string): boolean {
   const ta = document.createElement("textarea");
@@ -1227,9 +1407,6 @@ function copyNow(text: string): boolean {
   return ok;
 }
 
-/** How long a new explainer usually takes, by mode (dev runs, Nov 2026: Explorer median 97 s, 50-193 s; Reader median 27 s). */
-const HOW_LONG: Record<string, string> = { playground: "1–3 minutes", "playground-2": "1–3 minutes", "lite-plus": "under a minute" };
-
 /** A typed prompt as a conversation title. */
 function clip(text: string): string {
   return text.length > 60 ? text.slice(0, 57) + "…" : text;
@@ -1238,8 +1415,8 @@ function clip(text: string): string {
 /** `req` with an edited prompt (a concept's text, a paper's note). A revise follow-up drops its section pick, made for the old text. */
 function withPromptText(req: GenerateRequest, text: string): GenerateRequest {
   const out: GenerateRequest = req.mode === "concept" ? { ...req, text } : { ...req, note: text };
-  if (out.followUp?.kind === "revise" && out.followUp.pick) {
-    const { pick: _old, ...f } = out.followUp;
+  if (out.followUp?.kind === "revise" && (out.followUp.pick || out.followUp.plan)) {
+    const { pick: _old, plan: _oldPlan, ...f } = out.followUp;
     out.followUp = f;
   }
   return out;
@@ -1248,7 +1425,7 @@ function withPromptText(req: GenerateRequest, text: string): GenerateRequest {
 /** The result card's settings line: "Explorer · low effort · hands-on · 47s" (plus "≈ $0.006" when SHOW_COST). */
 function resultMeta(rec: ExplainerRecord): string {
   const u = rec.usage!;
-  const parts = [MODE_NAME[u.quality] ?? u.quality];
+  const parts = [modeName(u.quality) ?? u.quality];
   if (u.quality === "quality-deep" || rec.request.reviewRounds) {
     const n = rec.request.reviewRounds;
     parts.push(!n ? "review rounds" : n >= 10 ? "review until clean" : `up to ${n} review round${n === 1 ? "" : "s"}`);
