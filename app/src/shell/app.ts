@@ -489,7 +489,7 @@ export class App {
     if (rec.status === "generating") body.push(h("p.msg-text", null, rec.replaces ? "Building a fresh explainer on the same prompt. The old one is replaced once this is ready." : isPaper ? "Reading your paper and designing an explainer. This usually takes 1–3 minutes." : rec.followUp?.add ? "Adding a section. Everything already on the page stays as it is." : rec.followUp?.kind === "revise" ? "Revising the explainer. This usually takes about a minute." : `Designing your explainer. This usually takes ${howLong(rec.request.quality) ?? "about a minute"}.`), steps);
     if (rec.status === "error") {
       body.push(steps, h("div.msg-error", { role: "alert" }, h("strong", null, "Something went wrong. "), rec.error ?? ""),
-        h("button.btn-pill", { type: "button", onclick: () => this.retry(rec) }, "↻ Try again"));
+        h("button.btn-pill", { type: "button", onclick: () => this.retryFailed(rec) }, "↻ Try again"));
     }
     if (rec.status === "done" && !rec.spec && rec.answer) {
       body.push(h("div.msg-text.msg-answer", { html: mdToHtml(rec.answer) }), h("p.msg-choice", null, "Nothing on the page was changed. Ask for a change if you'd like one."));
@@ -1117,7 +1117,7 @@ export class App {
     const items: HTMLElement[] = [];
     if (canRedo) {
       items.push(act(ICON.retry, rec.status === "error" ? "Try again" : "Retry: a fresh explainer on the same prompt", () => {
-        if (rec.status === "error") { this.retry(rec); return; } // nothing to lose: run it again in place
+        if (rec.status === "error") { this.retryFailed(rec); return; } // nothing to lose: run it again in place
         this.openPromptBox(rec, "retry");
       }));
     }
@@ -1145,7 +1145,7 @@ export class App {
       const go = h("button.btn-pill.is-primary", { type: "button" }, "Retry") as HTMLButtonElement;
       go.addEventListener("click", () => { go.disabled = true; this.promptBox = undefined; this.retryFresh(rec); });
       el = h("div.retry-confirm", null,
-        h("p.dock-note", null, "This builds a fresh explainer on the same prompt and replaces this one. The old one can't be recovered."),
+        h("p.dock-note", null, `This builds a fresh explainer on the same prompt ${this.retryWith(rec)} and replaces this one. The old one can't be recovered.`),
         h("div.msg-choices", null, go, h("button.btn-pill", { type: "button", onclick: close }, "Cancel")));
     } else {
       const paper = rec.request.mode === "paper";
@@ -1174,6 +1174,16 @@ export class App {
     this.refresh(rec.id);
   }
 
+  /** What a Retry of `rec` will use, for its confirm: "with Explorer · medium effort · thinking on" or "in this page's own mode". */
+  private retryWith(rec: ExplainerRecord): string {
+    const { request: r } = this.withCurrentOptions(rec.request);
+    if (r.followUp?.kind === "revise") return "in this page's own mode";
+    const parts = [modeName(r.quality) ?? r.quality ?? "the same mode"];
+    if (r.effort) parts.push(`${r.effort} effort`);
+    if (r.quality === "playground") parts.push(`thinking ${r.planThinking ? "on" : "off"}`);
+    return `with ${parts.join(" · ")}`;
+  }
+
   /** ✏️ Edit: the same request with the edited prompt. A failed message runs again in place; a finished one is replaced like Retry. */
   private editPrompt(rec: ExplainerRecord, text: string) {
     if (rec.status === "error") {
@@ -1181,19 +1191,31 @@ export class App {
       rec.prompt = { ...rec.prompt, text };
       rec.request = request;
       if (!rec.thread && rec.request.mode === "concept") rec.title = clip(text);
-      if (ask) { // the mode changed to one that asks what to add to each section, like a new prompt
-        rec.status = "asking";
-        rec.error = undefined;
-        rec.steps = {};
-        rec.updatedAt = Date.now();
-        putRecord(rec);
-        this.refresh(rec.id);
-        return;
-      }
-      this.retry(rec); // a revise follow-up on Explorer / Reader matches the new text to sections first
+      this.rerun(rec, ask);
       return;
     }
     this.retryFresh(rec, text);
+  }
+
+  /** ↻ Retry / Try again on a failed message: runs again in place, with the composer's current mode and options. */
+  private retryFailed(rec: ExplainerRecord) {
+    const { request, ask } = this.withCurrentOptions(rec.request);
+    rec.request = request;
+    this.rerun(rec, ask);
+  }
+
+  /** A failed message with its new request: asks what to add to each section first if the mode needs it, else runs again. */
+  private rerun(rec: ExplainerRecord, ask: boolean) {
+    if (ask) { // the mode changed to one that asks what to add to each section, like a new prompt
+      rec.status = "asking";
+      rec.error = undefined;
+      rec.steps = {};
+      rec.updatedAt = Date.now();
+      putRecord(rec);
+      this.refresh(rec.id);
+      return;
+    }
+    this.retry(rec); // a revise follow-up on Explorer / Reader matches the text to sections first
   }
 
   /**
@@ -1202,10 +1224,17 @@ export class App {
    * to "what to add to each section" is kept when the mode is the same; a mode that asks it, newly chosen, asks again.
    */
   private editedRequest(req: GenerateRequest, text: string): { request: GenerateRequest; ask: boolean } {
-    const edited = withPromptText(req, text);
+    return this.withCurrentOptions(withPromptText(req, text));
+  }
+
+  /**
+   * `req` with the composer's current mode and options (v1 defaults for the hidden ones), as a newly sent prompt would
+   * have. A revise follow-up keeps its page's own mode (and its plan). Used by ✏️ Edit and ↻ Retry.
+   */
+  private withCurrentOptions(req: GenerateRequest): { request: GenerateRequest; ask: boolean } {
     const choices = this.dock?.composer.choices?.();
-    if (!choices || edited.followUp?.kind === "revise") return { request: edited, ask: false };
-    const { quality, reviewRounds: _r, effort: _e, interactivity: _i, level: _l, planThinking: _t, colorMode: _c, extras, ...rest } = edited;
+    if (!choices || req.followUp?.kind === "revise") return { request: req, ask: false };
+    const { quality, reviewRounds: _r, effort: _e, interactivity: _i, level: _l, planThinking: _t, colorMode: _c, extras, ...rest } = req;
     const opts = optionsOf(choices);
     const keep = !!extras && quality === opts.quality;
     const none = !keep && !EXTRAS_QUESTION && isQuality(opts.quality); // question hidden (v1): no extras
@@ -1213,8 +1242,9 @@ export class App {
   }
 
   /**
-   * A fresh run of `old`'s request (same mode, options and prompt), from scratch: nothing about `old` is sent.
-   * (Sending its section titles to avoid made each retry shorter, as the list grew with every retry.)
+   * A fresh run of `old`'s prompt, from scratch: nothing about `old` is sent, and it uses the composer's current mode and
+   * options (a revise follow-up keeps its page's mode and plan). (Sending its section titles to avoid made each retry
+   * shorter, as the list grew with every retry.)
    * It is a new record; `old` stays hidden until it ends (settleRetry). `text`: an edited prompt (✏️ Edit).
    */
   private async retryFresh(old: ExplainerRecord, text?: string) {
@@ -1226,10 +1256,10 @@ export class App {
       const { feedback: _used, ...f } = request.followUp;
       request.followUp = f;
     }
-    // An edited prompt: the current mode and options (editedRequest); a revise follow-up's section pick is dropped, as it
-    // was made for the old text, so the server's finder decides again.
+    // An edited prompt also gets the new text; a revise follow-up's section pick is then dropped, as it was made for the
+    // old text, so the server's finder decides again. A plain Retry keeps the prompt (and a revise follow-up's plan).
     let ask = false;
-    if (text !== undefined) ({ request, ask } = this.editedRequest(request, text));
+    ({ request, ask } = text !== undefined ? this.editedRequest(request, text) : this.withCurrentOptions(request));
     const now = Date.now();
     const rec: ExplainerRecord = {
       id: uid(), title: text !== undefined && !old.thread && request.mode === "concept" ? clip(text) : old.title, createdAt: now, updatedAt: now,
