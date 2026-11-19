@@ -127,8 +127,10 @@ def remaining_usd(settings: Settings, db: Database, user_id: str) -> float:
     return max(0.0, min(settings.daily_usd - usage_today(settings, db, user_id)["usd"], settings.global_daily_usd - _global_usd(db)))
 
 
-def start_generation(settings: Settings, db: Database, user_id: str) -> str:
-    """Count a generation (or refuse it); returns the usage event's id, to price when it ends."""
+def start_generation(settings: Settings, db: Database, user_id: str, allow_over: bool = False) -> str:
+    """Count a generation (or refuse it); returns the usage event's id, to price when it ends. allow_over: a follow-ups v5
+    agent run past the day's explainers still starts (the route runs it answer-only, so it makes no page and isn't counted);
+    the spend cap and the running limit still apply."""
     check_spend(settings, db, user_id)
     start = day_start_ms()
     with db.session() as s:
@@ -139,7 +141,7 @@ def start_generation(settings: Settings, db: Database, user_id: str) -> str:
         key = _key_of(s, settings, user_id)
         gens = s.scalar(select(func.count()).select_from(UsageEvent).where(
             _mine(user_id, key), UsageEvent.kind == "generate", UsageEvent.created_at >= start)) or 0
-        if gens >= settings.daily_generations:
+        if gens >= settings.daily_generations and not allow_over:
             raise ApiError(429, f"You've made today's {settings.daily_generations} free explainers. {reset_note()}", "quota_exceeded")
         running = s.scalar(select(func.count()).select_from(UsageEvent).where(
             UsageEvent.user_id == user_id, UsageEvent.kind == "generate", UsageEvent.finished.is_(False),
@@ -150,6 +152,15 @@ def start_generation(settings: Settings, db: Database, user_id: str) -> str:
         s.add(ev)
         s.flush()
         return ev.id
+
+
+def over_daily(settings: Settings, db: Database, user_id: str) -> bool:
+    """The day's explainers are used up (follow-ups v5: the agent then only answers)."""
+    with db.session() as s:
+        key = _key_of(s, settings, user_id)
+        gens = s.scalar(select(func.count()).select_from(UsageEvent).where(
+            _mine(user_id, key), UsageEvent.kind == "generate", UsageEvent.created_at >= day_start_ms())) or 0
+    return gens >= settings.daily_generations
 
 
 def finish_generation(db: Database, event_id: str, usd: float, failed: bool = False) -> None:

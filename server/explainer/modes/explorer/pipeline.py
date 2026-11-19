@@ -24,7 +24,7 @@ from ...core.validate import without_blocks
 from ...factcheck import fact_check
 from ...notes import note_fields, write_notes
 from ...pricing import UsageLog
-from ..common import (FACTCHECK_SECTIONS, FULL_BUDGET, Emit, _prompt, _step, drops_examples, finish_spec, level_from_brief, plan_detail,
+from ..common import (FACTCHECK_SECTIONS, FULL_BUDGET, Emit, _prompt, _step, plan_preview, drops_examples, finish_spec, level_from_brief, plan_detail,
                       planner_hint, read_source, write_outline)
 from .settings import ExplorerSettings
 from .stream import PLANNER_NOTE_PG, Streamed, strip_prebuilt
@@ -61,7 +61,7 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
     if drops_examples(req.get("extras")):
         outline = without_blocks(outline, {"examples"})
     outline = strip_prebuilt(outline)
-    _step(emit, "plan", "done", f"{len(outline['stages'])} stages")  # the lesson text is finished: say so before the playgrounds
+    _step(emit, "plan", "done", f"{len(outline['stages'])} stages", plan_preview(outline))  # the lesson text is finished: say so before the playgrounds
 
     _step(emit, "interaction", "running")
     outline, cl = streamed.finish(outline, warnings, lambda d: _step(emit, "interaction", "running", d))

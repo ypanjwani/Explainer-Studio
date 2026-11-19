@@ -148,6 +148,14 @@ html { scrollbar-gutter: stable; }
 .st-cell.is-on { fill: var(--accent-soft); fill-opacity: 1; stroke: var(--accent); stroke-width: 2; }
 .st-num { fill: var(--text); font-variant-numeric: tabular-nums; pointer-events: none; }
 .st-num.is-on { font-weight: 700; }
+.st-thead { fill: var(--accent-soft); fill-opacity: .6; stroke: var(--grid); }
+.st-thtext { fill: var(--text); font-weight: 700; pointer-events: none; }
+/* drawing mark (follow-ups v4, phase 3): defaults when the drawing names no colour; st-s-* = a palette stroke */
+.st-draw-rect, .st-draw-circle, .st-draw-ellipse, .st-draw-polygon, .st-draw-path { fill: var(--c-gray); }
+.st-draw-stroke { stroke: var(--text); }
+.st-draw-text { fill: var(--text); font-size: 12px; dominant-baseline: middle; pointer-events: none; }
+.st-s-blue { stroke: var(--c-blue); } .st-s-orange { stroke: var(--c-orange); } .st-s-green { stroke: var(--c-green); } .st-s-red { stroke: var(--c-red); }
+.st-s-purple { stroke: var(--c-purple); } .st-s-teal { stroke: var(--c-teal); } .st-s-gray { stroke: var(--c-gray); } .st-s-pink { stroke: var(--c-pink); }
 .st-bracket { fill: none; stroke: var(--text); stroke-width: 1.5; }
 .st-gcell { fill: transparent; stroke: var(--border); }
 .st-gcell.is-colored { stroke: var(--surface); }

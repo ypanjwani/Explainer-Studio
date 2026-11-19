@@ -1,5 +1,5 @@
 // Copied from the ai-playground experiment (Bloging-substack/ECommerce/ai-playground), adapted for Explainer Studio's Playground mode.
-// Layout + SVG for structural marks: graph, tree, matrix, sequence, grid.
+// Layout + SVG for structural marks: graph, tree, matrix, table, sequence, grid.
 // Snippets pass structure only; every position is computed here.
 // ctx = { n, esc, fmt, colorAttr, tip(text), hit(mark, index, part), sx, sy, box(mark), arrowId }
 (function (root) {
@@ -42,8 +42,8 @@
   // checks layout with it, so a layout problem the checker reports is one the reader would see.
   const W = 440, H = 290, MARGIN = { l: 46, r: 14, t: 16, b: 32 };
   // Structural marks are laid out here; charts made only of these (plus pie/text) have no axes.
-  const STRUCT = new Set(['graph', 'tree', 'matrix', 'sequence', 'grid']);
-  const AXISLESS = new Set(['graph', 'tree', 'matrix', 'sequence', 'grid', 'pie', 'text', 'shape', 'link']);
+  const STRUCT = new Set(['graph', 'tree', 'matrix', 'table', 'drawing', 'sequence', 'grid']);
+  const AXISLESS = new Set(['graph', 'tree', 'matrix', 'table', 'drawing', 'sequence', 'grid', 'pie', 'text', 'shape', 'link']);
   // Data-space extent of a heatmap: explicit x/y, else one unit per cell.
   const heatExtent = (m, axis) => axis === 'x' ? (m.x || [0, m.values[0].length]) : (m.y || [0, m.values.length]);
 
@@ -395,6 +395,114 @@
     return out;
   }
 
+  // ------------------------------------------------ tables (stacked, header row first)
+  // table(columns, rows, opts): a small table of words and numbers (Follow-ups v4, Nov 13 2026). Several tables stack top
+  // to bottom. Column widths follow the longest cell; numbers are right-aligned and use `digits` decimals.
+  function tables(ms, ctx, b) {
+    const { n, esc, fmt, tip, hit } = ctx;
+    const GAP = 10, CH = 6.6;
+    const totalRows = ms.reduce((t, m) => t + m.rows.length + 1 + (m.label !== undefined ? 1 : 0), 0);
+    const rh = clamp((b.y1 - b.y0 - GAP * (ms.length - 1)) / Math.max(1, totalRows), 14, 30);
+    const fs = clamp(rh * 0.5, 9, 13);
+    let y = b.y0 + Math.max(0, (b.y1 - b.y0 - (totalRows * rh + GAP * (ms.length - 1))) / 2);
+    let out = '';
+    ms.forEach((m) => {
+      const C = m.columns.length;
+      const show = (v) => (typeof v === 'number' ? (m.digits !== undefined ? Number(v).toFixed(clamp(m.digits | 0, 0, 6)) : fmt(v)) : String(v));
+      const want = m.columns.map((h, c) => Math.max(String(h).length, ...m.rows.map((r) => show(r[c]).length), 2));
+      const room = b.x1 - b.x0, natural = want.reduce((t, w) => t + w * CH + 14, 0);
+      const k = Math.min(1, room / natural);
+      const widths = want.map((w) => (w * CH + 14) * k);
+      const tw = widths.reduce((t, w) => t + w, 0);
+      const x0 = b.x0 + (room - tw) / 2;
+      const xs = widths.reduce((acc, w, i) => (acc.push(i ? acc[i - 1] + widths[i - 1] : x0), acc), []);
+      const hl = m.highlight || {};
+      const hr = Number.isInteger(hl.row) ? hl.row : null, hc = Number.isInteger(hl.col) ? hl.col : null;
+      const isOn = (r, c) => (hr !== null || hc !== null) && (hr === null || hr === -1 || hr === r) && (hc === null || hc === -1 || hc === c);
+      if (m.label !== undefined) {
+        out += `<text class="st-mlabel" x="${n(x0 + tw / 2)}" y="${n(y + rh / 2)}" text-anchor="middle" dy="0.35em">${esc(cut(m.label, Math.floor(tw / 7)))}</text>`;
+        y += rh;
+      }
+      m.columns.forEach((h, c) => {
+        out += `<rect class="st-thead" x="${n(xs[c])}" y="${n(y)}" width="${n(widths[c])}" height="${n(rh)}"/>`;
+        const [t, sq] = fitText(h, Math.max(2, Math.floor((widths[c] - 8) / CH)), CH);
+        out += `<text class="st-thtext" x="${n(xs[c] + widths[c] / 2)}" y="${n(y + rh / 2)}" text-anchor="middle" dy="0.35em" font-size="${n(fs)}"${sq}>${esc(t)}</text>`;
+      });
+      y += rh;
+      m.rows.forEach((row, r) => {
+        row.forEach((v, c) => {
+          const on = isOn(r, c);
+          const s = show(v), num = typeof v === 'number';
+          out += `<rect class="st-cell${on ? ' is-on' : ''}" x="${n(xs[c])}" y="${n(y)}" width="${n(widths[c])}" height="${n(rh)}"` +
+            `${tip(`${m.columns[c]}: ${s}`)}${hit(m, r * C + c, 'cell')}/>`;
+          const maxC = Math.max(2, Math.floor((widths[c] - 8) / CH));
+          const [t, sq] = num ? [fitNum(v, maxC, show), ''] : fitText(s, maxC, CH);
+          const tx = num ? xs[c] + widths[c] - 5 : xs[c] + 5;
+          out += `<text class="st-num${on ? ' is-on' : ''}" x="${n(tx)}" y="${n(y + rh / 2)}" text-anchor="${num ? 'end' : 'start'}" dy="0.35em" font-size="${n(fs)}"${sq}>${esc(t)}</text>`;
+        });
+        y += rh;
+      });
+      y += GAP;
+    });
+    return out;
+  }
+
+  // ------------------------------------------------ drawings (follow-ups v4, phase 3)
+  // A drawing's own picture: each item is rebuilt here from the whitelist sandbox.cjs checked (tag, attributes), every
+  // value escaped, in a nested svg with the drawing's own viewBox, so nothing the model wrote reaches the page as markup.
+  // Several drawings in one chart stack top to bottom.
+  const DRAW_TAG_ATTRS = {
+    rect: ['x', 'y', 'width', 'height', 'rx', 'ry'], circle: ['cx', 'cy', 'r'], ellipse: ['cx', 'cy', 'rx', 'ry'],
+    line: ['x1', 'y1', 'x2', 'y2'], polyline: ['points'], polygon: ['points'], path: ['d'],
+    text: ['x', 'y', 'font-size', 'text-anchor', 'font-weight'],
+  };
+  const DRAW_PLAIN = ['stroke-width', 'opacity', 'fill-opacity', 'stroke-opacity', 'transform'];
+  function drawings(ms, ctx, b) {
+    const { n, esc, colorAttr, tip, hit } = ctx;
+    const GAP = 8;
+    const labH = (m) => (m.label !== undefined ? 18 : 0);
+    const room = b.y1 - b.y0 - GAP * (ms.length - 1) - ms.reduce((t, m) => t + labH(m), 0);
+    let y = b.y0;
+    let out = '';
+    ms.forEach((m) => {
+      const w = Number(m.w) || 400, h = Number(m.h) || 240;
+      const bh = Math.max(20, room / ms.length);
+      if (m.label !== undefined) {
+        out += `<text class="st-mlabel" x="${n((b.x0 + b.x1) / 2)}" y="${n(y + 12)}" text-anchor="middle">${esc(cut(m.label, 60))}</text>`;
+        y += 18;
+      }
+      let inner = '';
+      m.items.forEach((it, i) => {
+        const a = it.attrs || {};
+        const tag = DRAW_TAG_ATTRS[it.tag] ? it.tag : null;
+        if (!tag) return;
+        let attrs = '';
+        for (const k of DRAW_TAG_ATTRS[tag]) {
+          if (a[k] === undefined) continue;
+          const v = k === 'points' ? a[k].map((p) => `${n(p[0])},${n(p[1])}`).join(' ') : typeof a[k] === 'number' ? n(a[k]) : a[k];
+          attrs += ` ${k}="${esc(v)}"`;
+        }
+        for (const k of DRAW_PLAIN) if (a[k] !== undefined) attrs += ` ${k}="${esc(a[k])}"`;
+        if (Array.isArray(a['stroke-dasharray'])) attrs += ` stroke-dasharray="${esc(a['stroke-dasharray'].map(n).join(' '))}"`;
+        const fillDefault = tag === 'text' ? undefined : (tag === 'line' || tag === 'polyline' ? 'none' : undefined);
+        const fill = a.fill !== undefined ? a.fill : fillDefault;
+        let style = '', cls = 'st-draw-' + tag;
+        if (fill === 'none') attrs += ' fill="none"';
+        else if (fill !== undefined) { const c = colorAttr(fill, 'fill'); cls += c.cls ? ' ' + c.cls : ''; style += c.style; }
+        if (a.stroke === 'none') attrs += ' stroke="none"';
+        else if (a.stroke !== undefined) { const c = colorAttr(a.stroke, 'stroke'); cls += c.cls ? ' st-s-' + c.cls.slice(2) : ''; style += c.style; }
+        else if (tag === 'line' || tag === 'polyline') cls += ' st-draw-stroke';
+        const st = style ? ` style="${esc(style)}"` : '';
+        const body = tag === 'text' ? esc(cut(String(it.text), 60)) : '';
+        const t = tag === 'text' ? '' : tip(`${tag} ${i + 1}`);
+        inner += tag === 'text' ? `<text class="${cls}"${attrs}${st}>${body}</text>` : `<${tag} class="${cls}"${attrs}${st}${t}${hit(m, i, 'item')}/>`;
+      });
+      out += `<svg class="st-drawing" x="${n(b.x0)}" y="${n(y)}" width="${n(b.x1 - b.x0)}" height="${n(bh)}" viewBox="0 0 ${n(w)} ${n(h)}" preserveAspectRatio="xMidYMid meet" overflow="hidden">${inner}</svg>`;
+      y += bh + GAP;
+    });
+    return out;
+  }
+
   // ------------------------------------------------ sequences (stacked rows)
   function sequences(ms, ctx, b) {
     const { n, esc, fmt, colorAttr, tip, hit } = ctx;
@@ -737,7 +845,7 @@
   }
 
   const structures = {
-    graph, tree, matrices, sequences, grid, gridExtent, cellAt, shape, shapeGeom, edgePoint, labelRoom, cut, fitText, fitNum, link, linkGeom,
+    graph, tree, matrices, tables, drawings, sequences, grid, gridExtent, cellAt, shape, shapeGeom, edgePoint, labelRoom, cut, fitText, fitNum, link, linkGeom,
     W, H, MARGIN, STRUCT, AXISLESS, heatExtent, autoDomain, chartFrame, zoomRange, dataExtent, equalAspect, placeText, placeLabels, textBox, TEXT_CHAR_W,
     markBox, axisNames, manualGraph, graphNameBelow, graphNameHalf, GRAPH_MIN_R, seriesLegend,
   };

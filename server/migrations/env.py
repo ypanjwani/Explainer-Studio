@@ -13,7 +13,8 @@ from sqlalchemy import create_engine, pool
 from explainer.config import database_url
 from explainer.db import Base
 
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+if os.environ.get("EXPLAINER_NO_DOTENV") != "1":  # the tests set it, as for app.create_app (audit F29): the migrations test
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env")  # loaded the real keys and switches into every later test
 config = context.config
 if config.config_file_name is not None:
     # keep loggers made before the migration (by default fileConfig turns them off, e.g. the app's in the test run)

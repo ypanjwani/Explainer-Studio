@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from explainer.app import create_app
+
+# The whole run, not only the app fixture: the migrations test (no app) loaded the real .env through migrations/env.py, and
+# its keys and switches (FOLLOWUP_V4=1) stayed in os.environ for every later test (audit F29; found Nov 14 2026).
+os.environ["EXPLAINER_NO_DOTENV"] = "1"
 
 ORIGIN = "http://localhost:5173"
 H = {"Origin": ORIGIN}
@@ -24,7 +30,7 @@ def app(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client.apps.googleusercontent.com")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-google-secret")
     for name in ("JEV_API_KEY", "ENV", "FREE_DAILY_GENERATIONS", "FREE_DAILY_USD", "GLOBAL_DAILY_USD", "TRUST_PROXY",
-                 "TRUST_PROXY_HOPS", "ALLOW_HIDDEN_MODES", "ALLOW_DEBUG", "GOOGLE_REDIRECT_URI"):
+                 "TRUST_PROXY_HOPS", "ALLOW_DEBUG", "GOOGLE_REDIRECT_URI"):
         monkeypatch.delenv(name, raising=False)
     return create_app()
 

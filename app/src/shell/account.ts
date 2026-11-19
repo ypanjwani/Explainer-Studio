@@ -2,7 +2,6 @@
 // (today's free allowance, sign out, delete account) and the offer to import pre-account history.
 
 import { allowance, currentUser, deleteAccount, logout, logoutEverywhere, refreshAllowance, type Allowance } from "../auth";
-import { deletePreference, listPreferences, setPreferenceStatus, type Preference } from "../api";
 import { h } from "../render/dom";
 import { temperatureDemo } from "./authDemo";
 import { modeButton } from "./mode";
@@ -107,45 +106,8 @@ export function allowanceMeter(a: Allowance | null): HTMLElement | null {
       h("span", { style: `width: ${pct}%` })));
 }
 
-/**
- * "My preferences": what the reader saved through Feedback. Active ones shape their future pages; each can be
- * turned off (kept for later) or deleted. Loaded when the section is opened.
- */
-function preferencesSection(): HTMLElement {
-  const list = h("div.pref-list", null, h("p.account-warn", null, "Loading…"));
-  const draw = (prefs: Preference[]) => {
-    if (!prefs.length) {
-      list.replaceChildren(h("p.account-warn", null, "No saved preferences yet. Use Feedback on a page and tick “Remember this”."));
-      return;
-    }
-    list.replaceChildren(...prefs.map((p) => {
-      const row = h("div.pref-row", { class: p.status === "off" ? "is-off" : "" },
-        h("span.pref-text", null, p.text),
-        h("button.btn-pill", { type: "button", onclick: () => act(() => setPreferenceStatus(p.id, p.status === "active" ? "off" : "active")) }, p.status === "active" ? "Turn off" : "Turn on"),
-        h("button.btn-pill.is-danger", { type: "button", "aria-label": `Delete preference: ${p.text}`, onclick: () => act(() => deletePreference(p.id)) }, "Delete"));
-      return row;
-    }));
-  };
-  const load = () => listPreferences().then(draw).catch((err) => {
-    list.replaceChildren(h("p.account-warn", null, err instanceof Error ? err.message : String(err)));
-  });
-  const act = async (run: () => Promise<unknown>) => {
-    try { await run(); } catch (err) { alertIn(list, err); return; }
-    await load();
-  };
-  const section = h("details.account-section", null,
-    h("summary", null, "My preferences"),
-    h("p.account-warn", null, "Saved from your feedback. The ones that are on are used for your future pages only."),
-    list) as HTMLDetailsElement;
-  section.addEventListener("toggle", () => { if (section.open) load(); });
-  return section;
-}
 
-function alertIn(list: HTMLElement, err: unknown) {
-  list.prepend(h("p.account-warn.pref-error", { role: "alert" }, err instanceof Error ? err.message : String(err)));
-}
-
-/** The account panel: allowance, preferences, sign out (here or everywhere), delete the account. */
+/** The account panel: allowance, sign out (here or everywhere), delete the account. */
 export async function openAccountPanel(): Promise<void> {
   const user = currentUser();
   if (!user) return;
@@ -179,7 +141,6 @@ export async function openAccountPanel(): Promise<void> {
     h("p.account-email", null, user.email, h("span.account-plan", null, "Free plan")),
     meter,
     status,
-    preferencesSection(),
     h("div.account-actions", null,
       h("button.btn-pill", { type: "button", onclick: async () => { await logout(); close(); } }, "Sign out"),
       h("button.btn-pill", { type: "button", onclick: async () => { await logoutEverywhere().catch(() => undefined); close(); } }, "Sign out on all devices")),

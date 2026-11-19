@@ -5,8 +5,6 @@
   "sections": 80,
   "chatMessages": 20,
   "chatChars": 40000,
-  "editChars": 60000,
-  "editMessages": 40,
   "followUpChars": 90000,
   "keptChars": 60000,
   "widgetChars": 200000,

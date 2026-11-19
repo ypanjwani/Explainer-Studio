@@ -29,6 +29,7 @@ ALLOWED = {
     "explainer", "explainer.data", "explainer.llm", "explainer.jev", "explainer.pricing", "explainer.js", "explainer.json_util",
     "explainer.brief", "explainer.design", "explainer.clarity", "explainer.factcheck", "explainer.notes", "explainer.filter",
     "explainer.paper_cache", "explainer.db", "explainer.followup",
+    "explainer.versions",  # the version store (follow-ups v5): code only, any follow-up version may read it
     "explainer.core", "explainer.core.compact", "explainer.core.edit", "explainer.core.examples", "explainer.core.expr",
     "explainer.core.factcheck", "explainer.core.followup", "explainer.core.references", "explainer.core.scene", "explainer.core.schema",
     "explainer.core.spec", "explainer.core.validate", "explainer.core.views", "explainer.core.color",
@@ -121,15 +122,15 @@ if RUN_EXPLORER:
 # A v3 follow-up on each mode: /api/followup/plan's handler, then the run.
 from explainer.core.validate import default_design
 from explainer.followup import parse_follow_up
-from explainer.modes.followup import steps as v3
+from explainer.modes.followup import entry
 import followup_v3_data as D
 for quality, page in (("lite-plus", {"kind": "revise", "outline": json.dumps(D.OLD)}), ("playground", D.FOLLOW)):
     if quality == "playground" and not RUN_EXPLORER:
         continue
     body = {"text": "make the tokens section clearer", "quality": quality, "followUp": {**page, "design": default_design(D.OLD)}}
-    plan_req = v3.parse_plan_request(body)
+    plan_req = entry.parse_plan_request(body)
     assert isinstance(plan_req, dict), plan_req
-    plan = v3.handle(F.FakeClient(), D.Store(None), plan_req)
+    plan = entry.handle(F.FakeClient(), D.Store(None), plan_req)
     assert plan["kind"] == "change", plan
     follow = parse_follow_up({**body["followUp"], "plan": {"sections": plan["sections"], "steps": plan["steps"]}})
     req = {"mode": "concept", "text": body["text"], "quality": quality, "extras": [], "followUp": follow}
@@ -146,7 +147,8 @@ def test_modes_run_with_every_other_mode_blocked():
     node = shutil.which("node") is not None
     proc = subprocess.run([sys.executable, "-c", ISOLATED, json.dumps(sorted(ALLOWED)), "1" if node else "0"],
                           cwd=Path(__file__).parent, capture_output=True, text=True, timeout=300,
-                          env={**__import__("os").environ, "PYTHONPATH": f"{SERVER}{__import__('os').pathsep}{Path(__file__).parent}"})
+                          env={**__import__("os").environ, "FOLLOWUP_V5": "0",  # this run checks the v3 follow-up path
+                               "PYTHONPATH": f"{SERVER}{__import__('os').pathsep}{Path(__file__).parent}"})
     assert proc.returncode == 0, proc.stderr[-3000:]
     loaded = json.loads(proc.stdout.strip().splitlines()[-1])
     assert all(allowed(m) for m in loaded), loaded
@@ -187,4 +189,130 @@ def test_every_prompt_and_format_the_modes_use_exists():
     # the two planners and the playground builder are looked up, so this test really covers them
     assert {("prompt", "LITE_SYSTEM"), ("prompt", "OUTLINE_SYSTEM"), ("prompt", "PLAYGROUND_SYSTEM"), ("prompt", "PLAYGROUND_EDIT"),
             ("prompt", "UNDERSTAND_SYSTEM"), ("prompt", "INDEX_SYSTEM"), ("prompt", "SECTION_EDIT_NOTE"), ("prompt", "LITE_REVISE_NOTE"),
-            ("prompt", "OUTLINE_CHART_SYSTEM")} <= found
+            ("prompt", "OUTLINE_CHART_SYSTEM"), ("prompt", "MAIN_FILE_SYSTEM"), ("prompt", "FOLLOWUP_V5_AGENT_SYSTEM"), ("prompt", "FOLLOWUP_V5_AGENT_LITE_SYSTEM"),
+            ("prompt", "FOLLOWUP_V5_REVIEW_SYSTEM"), ("prompt", "FOLLOWUP_V5_REPLY_SYSTEM")} <= found
+
+
+# ---------- follow-ups v3 and v4 stay apart, so v3/ can be deleted without touching v4 ----------
+
+FOLLOWUP = MODES / "followup"
+V3, V4, V5 = "explainer.modes.followup.v3", "explainer.modes.followup.v4", "explainer.modes.followup.v5"
+# The only files that may know both versions: they pick one, importing v3 only inside its branch.
+DISPATCH = {"entry.py", "run.py", "__init__.py"}
+
+
+def followup_imports(path: Path) -> set[str]:
+    """imports_of, plus packages named in "from x import pkg" (imports_of only counts .py modules)."""
+    out = imports_of(path)
+    mod = module_of(path)
+    package = mod if path.name == "__init__.py" else mod.rsplit(".", 1)[0]
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.level:
+            base = package.split(".")[:len(package.split(".")) - (node.level - 1)]
+            target = ".".join(base + ([node.module] if node.module else []))
+            out |= {f"{target}.{a.name}" for a in node.names if (PKG.parent / Path(*f"{target}.{a.name}".split("."))).is_dir()}
+    return out
+
+
+def _uses(path: Path, version: str) -> list[str]:
+    return sorted(m for m in followup_imports(path) if m == version or m.startswith(version + "."))
+
+
+def test_followup_versions_import_only_shared_follow_up_tools():
+    bad = {}
+    for path in (FOLLOWUP / "v4").rglob("*.py"):
+        if _uses(path, V3):
+            bad[str(path.relative_to(SERVER))] = _uses(path, V3)
+    for path in (FOLLOWUP / "v3").rglob("*.py"):
+        if _uses(path, V4):
+            bad[str(path.relative_to(SERVER))] = _uses(path, V4)
+    for path in FOLLOWUP.glob("*.py"):  # the shared follow-up tools (shared.py, check.py, playground_edit.py, ...)
+        if path.name not in DISPATCH and (_uses(path, V3) or _uses(path, V4)):
+            bad[str(path.relative_to(SERVER))] = _uses(path, V3) + _uses(path, V4)
+    for path in (FOLLOWUP / "v5").rglob("*.py"):  # v5 stands alone: deleting v3/ or v4/ never touches it
+        if _uses(path, V3) or _uses(path, V4):
+            bad[str(path.relative_to(SERVER))] = _uses(path, V3) + _uses(path, V4)
+    for path in [*(FOLLOWUP / "v3").rglob("*.py"), *(FOLLOWUP / "v4").rglob("*.py")]:
+        if _uses(path, V5):
+            bad[str(path.relative_to(SERVER))] = _uses(path, V5)
+    for path in FOLLOWUP.glob("*.py"):
+        if path.name not in DISPATCH and _uses(path, V5):
+            bad[str(path.relative_to(SERVER))] = _uses(path, V5)
+    assert not bad, f"no follow-up version may import another (nor a shared tool any of them), so each can be deleted alone: {bad}"
+
+
+def test_v3_is_imported_only_by_the_dispatchers():
+    """Outside followup/v3/ itself, only entry.py and run.py name v3 (each inside its v3 branch)."""
+    users = set()
+    for path in PKG.rglob("*.py"):
+        if FOLLOWUP / "v3" in path.parents:
+            continue
+        if _uses(path, V3):
+            users.add(str(path.relative_to(FOLLOWUP)) if FOLLOWUP in path.parents else str(path.relative_to(SERVER)))
+    assert users <= {"entry.py", "run.py"}, users
+
+
+def test_v4_and_v5_are_imported_only_by_the_dispatchers():
+    """Outside their own folders, only entry.py and run.py name v4 or v5 (each inside its branch)."""
+    for version in (V4, V5):
+        folder = FOLLOWUP / version.rsplit(".", 1)[-1]
+        users = set()
+        for path in PKG.rglob("*.py"):
+            if folder in path.parents:
+                continue
+            if _uses(path, version):
+                users.add(str(path.relative_to(FOLLOWUP)) if FOLLOWUP in path.parents else str(path.relative_to(SERVER)))
+        assert users <= {"entry.py", "run.py"}, (version, users)
+
+
+V4_WITHOUT_V3 = r'''
+import importlib.abc, sys
+
+class NoV3(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name == "explainer.modes.followup.v3" or name.startswith("explainer.modes.followup.v3."):
+            raise ImportError(f"blocked: {name} (follow-ups v3 is treated as deleted)")
+        return None
+
+sys.meta_path.insert(0, NoV3())
+import pytest
+code = pytest.main(["test_followup_v4.py", "-q", "-p", "no:cacheprovider"])
+loaded = [m for m in sys.modules if m.startswith("explainer.modes.followup.v3")]
+assert not loaded, loaded
+sys.exit(int(code))
+'''
+
+
+def test_v4_runs_with_v3_deleted():
+    """The whole v4 test suite (talk, editor, tools, reply, through run.py and the plan route) in a fresh Python where any
+    import of followup/v3 fails: proof that deleting v3/ doesn't break v4."""
+    proc = subprocess.run([sys.executable, "-c", V4_WITHOUT_V3], cwd=Path(__file__).parent, capture_output=True, text=True, timeout=300,
+                          env={**__import__("os").environ, "PYTHONPATH": f"{SERVER}{__import__('os').pathsep}{Path(__file__).parent}"})
+    assert proc.returncode == 0, (proc.stdout[-3000:], proc.stderr[-3000:])
+
+
+V5_WITHOUT_V3_V4 = r"""
+import importlib.abc, sys
+
+class NoOld(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        for old in ("explainer.modes.followup.v3", "explainer.modes.followup.v4"):
+            if name == old or name.startswith(old + "."):
+                raise ImportError(f"blocked: {name} (follow-ups v3 and v4 are treated as deleted)")
+        return None
+
+sys.meta_path.insert(0, NoOld())
+import pytest
+code = pytest.main(["test_followup_v5.py", "-q", "-p", "no:cacheprovider"])
+loaded = [m for m in sys.modules if m.startswith(("explainer.modes.followup.v3", "explainer.modes.followup.v4"))]
+assert not loaded, loaded
+sys.exit(int(code))
+"""
+
+
+def test_v5_runs_with_v3_and_v4_deleted():
+    """The whole v5 test suite (talk, editor, tools, review, the base page, the plan route) in a fresh Python where any
+    import of followup/v3 or followup/v4 fails: proof that deleting either doesn't break v5."""
+    proc = subprocess.run([sys.executable, "-c", V5_WITHOUT_V3_V4], cwd=Path(__file__).parent, capture_output=True, text=True, timeout=300,
+                          env={**__import__("os").environ, "PYTHONPATH": f"{SERVER}{__import__('os').pathsep}{Path(__file__).parent}"})
+    assert proc.returncode == 0, (proc.stdout[-3000:], proc.stderr[-3000:])

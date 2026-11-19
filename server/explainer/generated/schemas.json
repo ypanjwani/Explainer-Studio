@@ -5651,48 +5651,5 @@
     }
    }
   }
- },
- "brief": {
-  "t": "object",
-  "shape": {
-   "type": {
-    "t": "literal",
-    "values": [
-     "interactive"
-    ]
-   },
-   "goal": {
-    "t": "string"
-   },
-   "math": {
-    "t": "string"
-   },
-   "insight": {
-    "t": "string"
-   },
-   "scenarios": {
-    "t": "optional",
-    "inner": {
-     "t": "array",
-     "element": {
-      "t": "string"
-     }
-    }
-   }
-  }
- },
- "labWritten": [
-  "text",
-  "callout",
-  "formula",
-  "flipcards",
-  "reveal",
-  "tabs",
-  "compare",
-  "quiz",
-  "predict",
-  "cards",
-  "table",
-  "conceptmap"
- ]
+ }
 }

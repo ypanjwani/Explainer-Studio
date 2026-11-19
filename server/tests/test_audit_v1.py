@@ -14,8 +14,8 @@ from explainer.db import Generation, User, now_ms
 from explainer.routes import ai
 
 PW = "correct horse battery"
-CONCEPT = {"mode": "concept", "text": "How does dropout work?", "quality": "quality-plus"}
-ROUTE = {"text": "x", "title": "T", "stages": ["a"]}
+CONCEPT = {"mode": "concept", "text": "How does dropout work?", "quality": "playground"}
+FORMULA = {"latex": "x"}  # any signed-in AI call shares these caps; /api/formula is a small one
 
 
 def db_of(app):
@@ -119,7 +119,7 @@ def test_failed_signups_dont_use_up_the_network(client, app):
 
 
 def test_legacy_account_gets_a_network_and_its_cap(client, app, monkeypatch):
-    monkeypatch.setattr(ai, "route_follow_up", lambda client_, req: {"kind": "new", "usd": 0.0})
+    monkeypatch.setattr(ai, "formula_turn", lambda client_, req: {"note": None, "usd": 0.0})
     c = app.extensions["explainer"]
     object.__setattr__(c.settings, "network_daily_usd", 0.10)
     signup_from(client, "old@example.com", "203.0.113.9")
@@ -133,7 +133,7 @@ def test_legacy_account_gets_a_network_and_its_cap(client, app, monkeypatch):
         assert s.get(User, uid).signup_net == "203.0.113.0/24"
     quota.record(c.settings, c.db, uid, "chat", 0.20)
     auth = {**J, "Authorization": f"Bearer {r.get_json()['accessToken']}"}
-    r = client.post("/api/route", json=ROUTE, headers=auth)
+    r = client.post("/api/formula", json=FORMULA, headers=auth)
     assert r.status_code == 429 and "network" in r.get_json()["error"]
 
 
@@ -155,7 +155,7 @@ def test_login_backfills_the_network(client, app):
 def _fake_generate(monkeypatch):
     def generate(client_, req, emit, **kw):
         return {"spec": {"title": "T", "stages": []}, "usage": {"quality": "q", "effort": "low", "steps": [], "totalUsd": 0.0, "seconds": 1}}
-    monkeypatch.setattr(ai, "generate", generate)
+    monkeypatch.setattr(ai.modes, "generate", generate)
 
 
 def _events(res) -> list[dict]:

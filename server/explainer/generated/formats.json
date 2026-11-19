@@ -102,374 +102,6 @@
   ],
   "description": "{$schema: \"https://json-schema.org/draft/2020-12/schema\"}"
  },
- "briefText": {
-  "type": "object",
-  "properties": {
-   "items": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "properties": {
-      "key": {
-       "type": "string"
-      },
-      "md": {
-       "type": "string"
-      }
-     },
-     "additionalProperties": false,
-     "required": [
-      "key",
-      "md"
-     ]
-    }
-   }
-  },
-  "additionalProperties": false,
-  "required": [
-   "items"
-  ],
-  "description": "{$schema: \"https://json-schema.org/draft/2020-12/schema\"}"
- },
- "route": {
-  "type": "object",
-  "properties": {
-   "kind": {
-    "type": "string",
-    "enum": [
-     "revise",
-     "new",
-     "unclear"
-    ]
-   }
-  },
-  "required": [
-   "kind"
-  ],
-  "additionalProperties": false
- },
- "feedback": {
-  "type": "object",
-  "properties": {
-   "changes": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "properties": {
-      "part": {
-       "type": "string",
-       "enum": [
-        "widget",
-        "text",
-        "section",
-        "new-section"
-       ]
-      },
-      "stage": {
-       "type": "string"
-      },
-      "after": {
-       "type": "string"
-      },
-      "what": {
-       "type": "string"
-      },
-      "quote": {
-       "type": "string"
-      }
-     },
-     "required": [
-      "part",
-      "stage",
-      "after",
-      "what",
-      "quote"
-     ],
-     "additionalProperties": false
-    }
-   },
-   "keep": {
-    "type": "array",
-    "items": {
-     "type": "string"
-    }
-   },
-   "pageWide": {
-    "type": "boolean"
-   },
-   "question": {
-    "type": "object",
-    "properties": {
-     "text": {
-      "type": "string"
-     },
-     "options": {
-      "type": "array",
-      "items": {
-       "type": "object",
-       "properties": {
-        "label": {
-         "type": "string"
-        },
-        "part": {
-         "type": "string",
-         "enum": [
-          "widget",
-          "text",
-          "section",
-          "new-section",
-          "page"
-         ]
-        },
-        "stage": {
-         "type": "string"
-        },
-        "after": {
-         "type": "string"
-        },
-        "what": {
-         "type": "string"
-        }
-       },
-       "required": [
-        "label",
-        "part",
-        "stage",
-        "after",
-        "what"
-       ],
-       "additionalProperties": false
-      }
-     }
-    },
-    "required": [
-     "text",
-     "options"
-    ],
-    "additionalProperties": false
-   },
-   "preference": {
-    "type": "string"
-   },
-   "topic": {
-    "type": "string",
-    "enum": [
-     "visuals",
-     "controls",
-     "level",
-     "length",
-     "tone",
-     "other"
-    ]
-   }
-  },
-  "required": [
-   "changes",
-   "keep",
-   "pageWide",
-   "question",
-   "preference",
-   "topic"
-  ],
-  "additionalProperties": false
- },
- "feedbackPick": {
-  "type": "object",
-  "properties": {
-   "sections": {
-    "type": "array",
-    "items": {
-     "type": "string"
-    }
-   },
-   "unsure": {
-    "type": "array",
-    "items": {
-     "type": "string"
-    }
-   },
-   "kind": {
-    "type": "string",
-    "enum": [
-     "parts",
-     "page",
-     "new",
-     "none"
-    ]
-   },
-   "why": {
-    "type": "string"
-   }
-  },
-  "required": [
-   "sections",
-   "unsure",
-   "kind",
-   "why"
-  ],
-  "additionalProperties": false
- },
- "targets": {
-  "type": "object",
-  "properties": {
-   "targets": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "properties": {
-      "part": {
-       "type": "string",
-       "enum": [
-        "widget",
-        "text",
-        "section",
-        "new-section"
-       ]
-      },
-      "stage": {
-       "type": "string"
-      },
-      "after": {
-       "type": "string"
-      },
-      "what": {
-       "type": "string"
-      }
-     },
-     "required": [
-      "part",
-      "stage",
-      "after",
-      "what"
-     ],
-     "additionalProperties": false
-    }
-   },
-   "pageWide": {
-    "type": "boolean"
-   }
-  },
-  "required": [
-   "targets",
-   "pageWide"
-  ],
-  "additionalProperties": false
- },
- "targetsAsk": {
-  "type": "object",
-  "properties": {
-   "targets": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "properties": {
-      "part": {
-       "type": "string",
-       "enum": [
-        "widget",
-        "text",
-        "section",
-        "new-section",
-        "remove"
-       ]
-      },
-      "stage": {
-       "type": "string"
-      },
-      "after": {
-       "type": "string"
-      },
-      "what": {
-       "type": "string"
-      }
-     },
-     "required": [
-      "part",
-      "stage",
-      "after",
-      "what"
-     ],
-     "additionalProperties": false
-    }
-   },
-   "pageWide": {
-    "type": "boolean"
-   },
-   "question": {
-    "type": "object",
-    "properties": {
-     "text": {
-      "type": "string"
-     },
-     "options": {
-      "type": "array",
-      "items": {
-       "type": "object",
-       "properties": {
-        "label": {
-         "type": "string"
-        },
-        "targets": {
-         "type": "array",
-         "items": {
-          "type": "object",
-          "properties": {
-           "part": {
-            "type": "string",
-            "enum": [
-             "widget",
-             "text",
-             "section",
-             "new-section",
-             "remove"
-            ]
-           },
-           "stage": {
-            "type": "string"
-           },
-           "after": {
-            "type": "string"
-           },
-           "what": {
-            "type": "string"
-           }
-          },
-          "required": [
-           "part",
-           "stage",
-           "after",
-           "what"
-          ],
-          "additionalProperties": false
-         }
-        },
-        "pageWide": {
-         "type": "boolean"
-        }
-       },
-       "required": [
-        "label",
-        "targets",
-        "pageWide"
-       ],
-       "additionalProperties": false
-      }
-     }
-    },
-    "required": [
-     "text",
-     "options"
-    ],
-    "additionalProperties": false
-   }
-  },
-  "required": [
-   "targets",
-   "pageWide",
-   "question"
-  ],
-  "additionalProperties": false
- },
  "followupUnderstand": {
   "type": "object",
   "properties": {
@@ -782,6 +414,83 @@
   ],
   "additionalProperties": false
  },
+ "followupTalk": {
+  "type": "object",
+  "properties": {
+   "kind": {
+    "type": "string",
+    "enum": [
+     "change",
+     "ask",
+     "answer",
+     "cannot",
+     "new_page",
+     "revert"
+    ]
+   },
+   "brief": {
+    "type": "string"
+   },
+   "sections": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "reply": {
+    "type": "string"
+   },
+   "question": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string"
+     },
+     "options": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "label": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "label"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "required": [
+     "text",
+     "options"
+    ],
+    "additionalProperties": false
+   },
+   "alternative": {
+    "type": "object",
+    "properties": {
+     "label": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "label"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "required": [
+   "kind",
+   "brief",
+   "sections",
+   "reply",
+   "question",
+   "alternative"
+  ],
+  "additionalProperties": false
+ },
  "pageIndex": {
   "type": "object",
   "properties": {
@@ -834,6 +543,83 @@
       "refersTo",
       "claims",
       "playgroundLevel"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  "required": [
+   "sections"
+  ],
+  "additionalProperties": false
+ },
+ "followupV5Review": {
+  "type": "object",
+  "properties": {
+   "problems": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "section": {
+       "type": "string"
+      },
+      "cause": {
+       "type": "string"
+      },
+      "what": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "section",
+      "cause",
+      "what"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  "required": [
+   "problems"
+  ],
+  "additionalProperties": false
+ },
+ "mainFileNotes": {
+  "type": "object",
+  "properties": {
+   "sections": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "introduces": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "uses": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "claims": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      }
+     },
+     "required": [
+      "id",
+      "introduces",
+      "uses",
+      "claims"
      ],
      "additionalProperties": false
     }
@@ -931,34 +717,6 @@
    }
   }
  },
- "codeLab": {
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-   "build",
-   "why",
-   "title",
-   "afterBlock",
-   "html"
-  ],
-  "properties": {
-   "build": {
-    "type": "boolean"
-   },
-   "why": {
-    "type": "string"
-   },
-   "title": {
-    "type": "string"
-   },
-   "afterBlock": {
-    "type": "integer"
-   },
-   "html": {
-    "type": "string"
-   }
-  }
- },
  "codeLabLook": {
   "type": "object",
   "additionalProperties": false,
@@ -970,881 +728,6 @@
     "type": "array",
     "items": {
      "type": "string"
-    }
-   }
-  }
- },
- "codeLabPlan": {
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-   "build",
-   "lesson",
-   "readerDoes",
-   "title",
-   "afterBlock",
-   "controls",
-   "visuals",
-   "expects",
-   "contrast",
-   "backup",
-   "checks"
-  ],
-  "properties": {
-   "build": {
-    "type": "boolean"
-   },
-   "lesson": {
-    "type": "string"
-   },
-   "readerDoes": {
-    "type": "string"
-   },
-   "title": {
-    "type": "string"
-   },
-   "afterBlock": {
-    "type": "integer"
-   },
-   "backup": {
-    "type": "string"
-   },
-   "checks": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "set",
-      "readout",
-      "expr"
-     ],
-     "properties": {
-      "set": {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-         "control",
-         "value"
-        ],
-        "properties": {
-         "control": {
-          "type": "string"
-         },
-         "value": {
-          "type": "number"
-         }
-        }
-       }
-      },
-      "readout": {
-       "type": "string"
-      },
-      "expr": {
-       "type": "string"
-      }
-     }
-    }
-   },
-   "controls": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "id",
-      "kind",
-      "label",
-      "min",
-      "max",
-      "step",
-      "value"
-     ],
-     "properties": {
-      "id": {
-       "type": "string"
-      },
-      "kind": {
-       "type": "string",
-       "enum": [
-        "slider",
-        "button",
-        "select"
-       ]
-      },
-      "label": {
-       "type": "string"
-      },
-      "min": {
-       "type": "number"
-      },
-      "max": {
-       "type": "number"
-      },
-      "step": {
-       "type": "number"
-      },
-      "value": {
-       "type": "number"
-      }
-     }
-    }
-   },
-   "visuals": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "id",
-      "kind",
-      "what"
-     ],
-     "properties": {
-      "id": {
-       "type": "string"
-      },
-      "kind": {
-       "type": "string",
-       "enum": [
-        "curve",
-        "bars",
-        "scatter",
-        "grid",
-        "diagram",
-        "animation",
-        "readout"
-       ]
-      },
-      "what": {
-       "type": "string"
-      }
-     }
-    }
-   },
-   "expects": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "control",
-      "changes"
-     ],
-     "properties": {
-      "control": {
-       "type": "string"
-      },
-      "changes": {
-       "type": "array",
-       "items": {
-        "type": "string"
-       }
-      }
-     }
-    }
-   },
-   "contrast": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-     "items",
-     "part"
-    ],
-    "properties": {
-     "items": {
-      "type": "array",
-      "items": {
-       "type": "string"
-      }
-     },
-     "part": {
-      "type": "string"
-     }
-    }
-   }
-  }
- },
- "codeLabPlanChart": {
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-   "build",
-   "lesson",
-   "readerDoes",
-   "title",
-   "afterBlock",
-   "controls",
-   "visuals",
-   "expects",
-   "contrast",
-   "backup",
-   "checks",
-   "vegaLite"
-  ],
-  "properties": {
-   "build": {
-    "type": "boolean"
-   },
-   "lesson": {
-    "type": "string"
-   },
-   "readerDoes": {
-    "type": "string"
-   },
-   "title": {
-    "type": "string"
-   },
-   "afterBlock": {
-    "type": "integer"
-   },
-   "backup": {
-    "type": "string"
-   },
-   "checks": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "set",
-      "readout",
-      "expr"
-     ],
-     "properties": {
-      "set": {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-         "control",
-         "value"
-        ],
-        "properties": {
-         "control": {
-          "type": "string"
-         },
-         "value": {
-          "type": "number"
-         }
-        }
-       }
-      },
-      "readout": {
-       "type": "string"
-      },
-      "expr": {
-       "type": "string"
-      }
-     }
-    }
-   },
-   "controls": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "id",
-      "kind",
-      "label",
-      "min",
-      "max",
-      "step",
-      "value"
-     ],
-     "properties": {
-      "id": {
-       "type": "string"
-      },
-      "kind": {
-       "type": "string",
-       "enum": [
-        "slider",
-        "button",
-        "select"
-       ]
-      },
-      "label": {
-       "type": "string"
-      },
-      "min": {
-       "type": "number"
-      },
-      "max": {
-       "type": "number"
-      },
-      "step": {
-       "type": "number"
-      },
-      "value": {
-       "type": "number"
-      }
-     }
-    }
-   },
-   "visuals": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "id",
-      "kind",
-      "what"
-     ],
-     "properties": {
-      "id": {
-       "type": "string"
-      },
-      "kind": {
-       "type": "string",
-       "enum": [
-        "curve",
-        "bars",
-        "scatter",
-        "grid",
-        "diagram",
-        "animation",
-        "readout"
-       ]
-      },
-      "what": {
-       "type": "string"
-      }
-     }
-    }
-   },
-   "expects": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "control",
-      "changes"
-     ],
-     "properties": {
-      "control": {
-       "type": "string"
-      },
-      "changes": {
-       "type": "array",
-       "items": {
-        "type": "string"
-       }
-      }
-     }
-    }
-   },
-   "contrast": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-     "items",
-     "part"
-    ],
-    "properties": {
-     "items": {
-      "type": "array",
-      "items": {
-       "type": "string"
-      }
-     },
-     "part": {
-      "type": "string"
-     }
-    }
-   },
-   "vegaLite": {
-    "type": "string"
-   }
-  }
- },
- "codeLabPlanSlim": {
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-   "build",
-   "lesson",
-   "title",
-   "afterBlock",
-   "backup",
-   "checks",
-   "claims",
-   "sanity",
-   "vegaLite"
-  ],
-  "properties": {
-   "build": {
-    "type": "boolean"
-   },
-   "lesson": {
-    "type": "string"
-   },
-   "title": {
-    "type": "string"
-   },
-   "afterBlock": {
-    "type": "integer"
-   },
-   "backup": {
-    "type": "string"
-   },
-   "checks": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "set",
-      "readout",
-      "expr"
-     ],
-     "properties": {
-      "set": {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-         "control",
-         "value"
-        ],
-        "properties": {
-         "control": {
-          "type": "string"
-         },
-         "value": {
-          "type": "number"
-         }
-        }
-       }
-      },
-      "readout": {
-       "type": "string"
-      },
-      "expr": {
-       "type": "string"
-      }
-     }
-    }
-   },
-   "claims": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "move",
-      "from",
-      "to",
-      "field",
-      "at",
-      "expect"
-     ],
-     "properties": {
-      "move": {
-       "type": "string"
-      },
-      "from": {
-       "type": "number"
-      },
-      "to": {
-       "type": "number"
-      },
-      "field": {
-       "type": "string"
-      },
-      "at": {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-         "control",
-         "value"
-        ],
-        "properties": {
-         "control": {
-          "type": "string"
-         },
-         "value": {
-          "type": "number"
-         }
-        }
-       }
-      },
-      "expect": {
-       "type": "string",
-       "enum": [
-        "rises",
-        "falls",
-        "same"
-       ]
-      }
-     }
-    }
-   },
-   "sanity": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "field",
-      "kind",
-      "by"
-     ],
-     "properties": {
-      "field": {
-       "type": "string"
-      },
-      "kind": {
-       "type": "string",
-       "enum": [
-        "probability",
-        "percent",
-        "nonnegative",
-        "sums_to_one",
-        "sums_to_100"
-       ]
-      },
-      "by": {
-       "type": "string"
-      }
-     }
-    }
-   },
-   "vegaLite": {
-    "type": "string"
-   }
-  }
- },
- "codeLabPlanVg": {
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-   "build",
-   "lesson",
-   "title",
-   "afterBlock",
-   "backup",
-   "checks",
-   "vega"
-  ],
-  "properties": {
-   "build": {
-    "type": "boolean"
-   },
-   "lesson": {
-    "type": "string"
-   },
-   "title": {
-    "type": "string"
-   },
-   "afterBlock": {
-    "type": "integer"
-   },
-   "backup": {
-    "type": "string"
-   },
-   "checks": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "set",
-      "readout",
-      "expr"
-     ],
-     "properties": {
-      "set": {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-         "control",
-         "value"
-        ],
-        "properties": {
-         "control": {
-          "type": "string"
-         },
-         "value": {
-          "type": "number"
-         }
-        }
-       }
-      },
-      "readout": {
-       "type": "string"
-      },
-      "expr": {
-       "type": "string"
-      }
-     }
-    }
-   },
-   "vega": {
-    "type": "string"
-   }
-  }
- },
- "codeLabVega": {
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-   "spec"
-  ],
-  "properties": {
-   "spec": {
-    "type": "string"
-   }
-  }
- },
- "labPlan": {
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-   "build",
-   "lesson",
-   "pattern",
-   "readerDoes",
-   "variables",
-   "buttons",
-   "shows",
-   "expects",
-   "contrast",
-   "replaces"
-  ],
-  "properties": {
-   "build": {
-    "type": "boolean"
-   },
-   "lesson": {
-    "type": "string"
-   },
-   "pattern": {
-    "type": "string",
-    "enum": [
-     "sweep",
-     "play",
-     "step",
-     "compare",
-     "click"
-    ]
-   },
-   "readerDoes": {
-    "type": "string"
-   },
-   "variables": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "name",
-      "label",
-      "min",
-      "max",
-      "step",
-      "value",
-      "role"
-     ],
-     "properties": {
-      "name": {
-       "type": "string"
-      },
-      "label": {
-       "type": "string"
-      },
-      "min": {
-       "type": "number"
-      },
-      "max": {
-       "type": "number"
-      },
-      "step": {
-       "type": "number"
-      },
-      "value": {
-       "type": "number"
-      },
-      "role": {
-       "type": "string",
-       "enum": [
-        "reader",
-        "rule",
-        "page"
-       ]
-      }
-     }
-    }
-   },
-   "buttons": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "id",
-      "label",
-      "does"
-     ],
-     "properties": {
-      "id": {
-       "type": "string"
-      },
-      "label": {
-       "type": "string"
-      },
-      "does": {
-       "type": "string"
-      }
-     }
-    }
-   },
-   "shows": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "id",
-      "kind",
-      "what"
-     ],
-     "properties": {
-      "id": {
-       "type": "string"
-      },
-      "kind": {
-       "type": "string",
-       "enum": [
-        "chart",
-        "readout",
-        "bars",
-        "table",
-        "text"
-       ]
-      },
-      "what": {
-       "type": "string"
-      }
-     }
-    }
-   },
-   "expects": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "var",
-      "changes"
-     ],
-     "properties": {
-      "var": {
-       "type": "string"
-      },
-      "changes": {
-       "type": "array",
-       "items": {
-        "type": "string"
-       }
-      }
-     }
-    }
-   },
-   "contrast": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-     "items",
-     "part"
-    ],
-    "properties": {
-     "items": {
-      "type": "array",
-      "items": {
-       "type": "string"
-      }
-     },
-     "part": {
-      "type": "string"
-     }
-    }
-   },
-   "replaces": {
-    "type": "array",
-    "items": {
-     "type": "integer"
-    }
-   }
-  }
- },
- "smartSections": {
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-   "sections"
-  ],
-  "properties": {
-   "sections": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "label",
-      "blurb",
-      "covers"
-     ],
-     "properties": {
-      "label": {
-       "type": "string"
-      },
-      "blurb": {
-       "type": "string"
-      },
-      "covers": {
-       "type": "string"
-      }
-     }
-    }
-   }
-  }
- },
- "deepenGaps": {
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-   "gaps"
-  ],
-  "properties": {
-   "gaps": {
-    "type": "array",
-    "items": {
-     "type": "object",
-     "additionalProperties": false,
-     "required": [
-      "topic",
-      "why"
-     ],
-     "properties": {
-      "topic": {
-       "type": "string"
-      },
-      "why": {
-       "type": "string"
-      }
-     }
     }
    }
   }
@@ -2071,241 +954,5 @@
     "expressions"
    ]
   }
- },
- "editTools": [
-  {
-   "name": "set_values",
-   "description": "Change one or more values of the selected part (numbers, true/false, menu choices, formulas, and text only after the reader chose AI through edit_text). Text changes are shown to the reader for approval; other changes apply at once.",
-   "input_schema": {
-    "type": "object",
-    "properties": {
-     "changes": {
-      "type": "array",
-      "items": {
-       "type": "object",
-       "properties": {
-        "path": {
-         "type": "array",
-         "items": {
-          "anyOf": [
-           {
-            "type": "string"
-           },
-           {
-            "type": "integer"
-           }
-          ]
-         },
-         "description": "A path from the Values or Lists description, e.g. [\"series\", 0, \"label\"]"
-        },
-        "value": {
-         "anyOf": [
-          {
-           "type": "string"
-          },
-          {
-           "type": "number"
-          },
-          {
-           "type": "boolean"
-          }
-         ]
-        }
-       },
-       "required": [
-        "path",
-        "value"
-       ]
-      }
-     }
-    },
-    "required": [
-     "changes"
-    ]
-   }
-  },
-  {
-   "name": "edit_text",
-   "description": "Use whenever the reader wants different wording (titles, labels, explanations, cards, quiz text). Give the text paths to change. Fixed code asks the reader whether to write it themselves (no AI) or have you rewrite it; never write new text before they choose.",
-   "input_schema": {
-    "type": "object",
-    "properties": {
-     "paths": {
-      "type": "array",
-      "items": {
-       "type": "array",
-       "items": {
-        "anyOf": [
-         {
-          "type": "string"
-         },
-         {
-          "type": "integer"
-         }
-        ]
-       },
-       "description": "A path from the Values or Lists description, e.g. [\"series\", 0, \"label\"]"
-      },
-      "description": "Text paths to change; empty means all the part's text"
-     }
-    },
-    "required": [
-     "paths"
-    ]
-   }
-  },
-  {
-   "name": "list_edit",
-   "description": "Remove, duplicate, or move up/down one item of a list in the selected part (a card, a series, a quiz question, a bar...). The path ends with the item's index.",
-   "input_schema": {
-    "type": "object",
-    "properties": {
-     "path": {
-      "type": "array",
-      "items": {
-       "anyOf": [
-        {
-         "type": "string"
-        },
-        {
-         "type": "integer"
-        }
-       ]
-      },
-      "description": "A path from the Values or Lists description, e.g. [\"series\", 0, \"label\"]"
-     },
-     "op": {
-      "type": "string",
-      "enum": [
-       "remove",
-       "duplicate",
-       "up",
-       "down"
-      ]
-     }
-    },
-    "required": [
-     "path",
-     "op"
-    ]
-   }
-  },
-  {
-   "name": "change_type",
-   "description": "Turn the selected part into one of its listed other forms (same data, different graph or layout).",
-   "input_schema": {
-    "type": "object",
-    "properties": {
-     "option": {
-      "type": "integer",
-      "description": "Index from 'Other forms for this part'"
-     }
-    },
-    "required": [
-     "option"
-    ]
-   }
-  },
-  {
-   "name": "show_graph_options",
-   "description": "Show the reader live previews of the part's other forms so they can click the one they like.",
-   "input_schema": {
-    "type": "object",
-    "properties": {}
-   }
-  },
-  {
-   "name": "show_settings",
-   "description": "Show the reader a form with every setting of the part so they can change values themselves.",
-   "input_schema": {
-    "type": "object",
-    "properties": {}
-   }
-  },
-  {
-   "name": "add_button",
-   "description": "Add a button to this step that sets page controls to chosen values when clicked (e.g. 'Paper's setting', 'Very creative').",
-   "input_schema": {
-    "type": "object",
-    "properties": {
-     "name": {
-      "type": "string"
-     },
-     "settings": {
-      "type": "array",
-      "items": {
-       "type": "object",
-       "properties": {
-        "var": {
-         "type": "string"
-        },
-        "value": {
-         "type": "number"
-        }
-       },
-       "required": [
-        "var",
-        "value"
-       ]
-      }
-     }
-    },
-    "required": [
-     "name",
-     "settings"
-    ]
-   }
-  },
-  {
-   "name": "arrange",
-   "description": "Move the whole selected part up or down within its step, duplicate it, or remove it.",
-   "input_schema": {
-    "type": "object",
-    "properties": {
-     "action": {
-      "type": "string",
-      "enum": [
-       "up",
-       "down",
-       "duplicate",
-       "remove"
-      ]
-     }
-    },
-    "required": [
-     "action"
-    ]
-   }
-  },
-  {
-   "name": "undo",
-   "description": "Undo the last change made to the page.",
-   "input_schema": {
-    "type": "object",
-    "properties": {}
-   }
-  },
-  {
-   "name": "ask_user",
-   "description": "Ask the reader one short clarifying question with 2-4 clickable answers. Their answer comes back as this tool's result.",
-   "input_schema": {
-    "type": "object",
-    "properties": {
-     "question": {
-      "type": "string"
-     },
-     "options": {
-      "type": "array",
-      "items": {
-       "type": "string"
-      }
-     }
-    },
-    "required": [
-     "question",
-     "options"
-    ]
-   }
-  }
- ]
+ }
 }

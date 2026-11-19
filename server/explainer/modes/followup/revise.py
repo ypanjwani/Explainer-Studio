@@ -112,13 +112,19 @@ def revision_summary(revision: dict, outline: dict, old: dict) -> dict:
         counts["moved"] = revision["moved"]
     if revision.get("steps"):  # follow-ups v2: how each step of the plan ended
         counts["steps"] = revision["steps"]
+    if revision.get("reply"):  # follow-ups v4: the friendly reply written from what really happened
+        counts["reply"] = revision["reply"]
+    if revision.get("suggestions"):  # follow-ups v5: the after-edit review's suggestions (also kept in the version's log)
+        counts["suggestions"] = revision["suggestions"]
 
     def n(k: int, what: str) -> str:
         return f"{k} section{'' if k == 1 else 's'} {what}"
 
     parts = [n(counts["added"], "added") if counts["added"] else "", n(counts["replaced"], "rewritten") if counts["replaced"] else "",
              n(counts["removed"], "removed") if counts["removed"] else "", n(counts["moved"], "moved") if counts.get("moved") else "",
-             f"{len(charts)} interactive part{'' if len(charts) == 1 else 's'} changed" if charts else "", f"{counts['kept']} kept as they were"]
+             f"{len(charts)} interactive part{'' if len(charts) == 1 else 's'} changed" if charts else "",
+             "page title changed" if "title" in (revision.get("page") or []) else "page heading changed" if revision.get("page") else "",
+             f"{counts['kept']} kept as they were"]
     return {"counts": counts, "text": ", ".join(p for p in parts if p)}
 
 

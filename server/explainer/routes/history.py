@@ -6,6 +6,8 @@
   GET    /api/explainers/<id>      -> the record
   PUT    /api/explainers/<id>      the whole record -> the record as stored
   DELETE /api/explainers/<id>      -> {ok}
+  POST   /api/explainers/<id>/revert {baseId, to?} -> {spec, version, reverted}: Undo / "go back to version N" as a
+                                      new version of the base's line, made by code (history.revert_version; no AI)
 
 Records belong to one user; any other id is a 404 (never a 403, which would confirm it exists).
 
@@ -20,7 +22,7 @@ from flask import Blueprint, Response, g
 from limits import parse as parse_limit
 from sqlalchemy import select
 
-from .. import history
+from .. import history, versions
 from ..db import User
 from ..js import json_stringify
 from ..middleware import ApiError, ctx, json_body, json_response, rate_limit, require_auth
@@ -88,6 +90,7 @@ def put_one(record_id: str) -> Response:
         if size > RECORD_MAX_BYTES:
             raise ApiError(413, "This explainer is too large to save.", "too_large")
         count, used = history.storage_used(s, g.user.id, record_id)
+        used += versions.size_used(s, g.user.id)  # saved versions count toward the cap too
         if count >= USER_MAX_RECORDS or used + size > USER_MAX_BYTES:
             raise ApiError(413, "Your history is full. Delete some old explainers to save new ones.", "storage_full")
     return json_response(stored)
@@ -101,3 +104,18 @@ def delete_one(record_id: str) -> Response:
     if not history.remove(ctx().db, g.user.id, record_id):
         raise ApiError(404, "Not found.")
     return json_response({"ok": True})
+
+
+@bp.post("/<record_id>/revert")
+@require_auth
+def revert(record_id: str) -> Response:
+    _check_id(record_id)
+    rate_limit(WRITE_LIMIT, "history-write", g.user.id, "Too many saves. Please wait a minute.")
+    body = json_body()
+    base_id = body.get("baseId") if isinstance(body, dict) else None
+    to = body.get("to") if isinstance(body, dict) else None
+    if not isinstance(base_id, str) or not RECORD_ID.match(base_id):
+        raise ApiError(400, "Invalid record id.", "invalid")
+    if to is not None and (not isinstance(to, int) or isinstance(to, bool) or to < 1):
+        raise ApiError(400, "Invalid version.", "invalid")
+    return json_response(history.revert_version(ctx().db, g.user.id, record_id, base_id, to, max_bytes=USER_MAX_BYTES))

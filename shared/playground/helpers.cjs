@@ -260,6 +260,13 @@
   // Accepts a root node or an existing tree mark (e.g. from treeNodes).
   const tree = (rootNode, o = {}) => (rootNode && rootNode.type === 'tree' ? { ...rootNode, ...o } : { type: 'tree', root: rootNode, ...o });
   const matrix = (values, o = {}) => ({ type: 'matrix', values, ...o });
+  // A small table: columns = header words, rows = [[cell, ...], ...] (words or numbers). opts: label, digits, highlight {row, col}.
+  const table = (columns, rows, o = {}) => ({ type: 'table', columns, rows, ...o });
+  // Its own picture, for what no other mark can draw (follow-ups v4, phase 3): items = svgEl(...) parts in the drawing's
+  // own w x h units (default 400 x 240), scaled into the chart. svgEl(tag, attrs, text): tag rect / circle / ellipse /
+  // line / polyline / polygon / path / text; attrs are numbers, palette colours or #hex (checked in sandbox.cjs).
+  const drawing = (items, o = {}) => ({ type: 'drawing', items, ...o });
+  const svgEl = (tag, attrs = {}, text) => (text === undefined ? { tag, attrs } : { tag, attrs, text });
   const sequence = (tokens, o = {}) => ({ type: 'sequence', tokens, ...o });
   const grid = (cells, o = {}) => ({ type: 'grid', cells, ...o });
   // Free-form diagram parts. box / circle / diamond fit the rectangle (x1, y1)-(x2, y2) in data units; node sits at a
@@ -303,7 +310,7 @@
     dot, add, sub, scale, norm, dist, transpose, matmul, matvec, solve,
     sigmoid, relu, tanh, softmax, entropy, gini, mse, gaussian, linreg, polyfit, polyval,
     mlpInit, mlpForward, mlpStep, mlpGraph, fitTree, predictTree, treeNodes, treeRegions, convolve2d,
-    graph, tree, matrix, sequence, grid, box, circle, diamond, node, link,
+    graph, tree, matrix, table, drawing, svgEl, sequence, grid, box, circle, diamond, node, link,
     line, area, points, point, bars, hline, vline, rect, arrow, text, heatmap, pie, countplot, kde,
   };
 

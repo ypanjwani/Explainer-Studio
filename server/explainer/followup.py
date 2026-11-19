@@ -1,21 +1,16 @@
-"""Follow-ups in a conversation: validating the FollowUp a request carries, and POST /api/route,
-which decides whether a follow-up message changes the explainer above ("revise") or asks for a
-new one ("new"), or can't tell ("unclear")."""
+"""Follow-ups in a conversation: validating the FollowUp a request carries (revise or new, and a revise
+follow-up's plan). Which one a typed message is, the plan step decides (POST /api/followup/plan,
+modes/followup/entry.py); the old router (POST /api/route) was removed on Nov 13 2026."""
 
 from __future__ import annotations
 
-import re
 from typing import Any
-
-import anthropic
 
 from . import data
 from .core.color import is_hex
 from .core.spec import parse_design
 from .core.validate import WIDGET_MAX_CHARS
-from .js import js_len, js_slice, js_trim, json_parse, json_stringify
-from .llm import HAIKU, cached_system, text_of
-from .pricing import price_of
+from .js import js_len, js_slice, json_stringify
 
 
 def _str(v: Any) -> str:
@@ -62,41 +57,6 @@ def parse_widgets(w: Any) -> dict | None:
     return out or None
 
 
-FEEDBACK_PARTS = ("widget", "text", "section", "new-section")
-FEEDBACK_ID = re.compile(r"^[0-9a-f]{32}$")
-FEEDBACK_TARGETS = 6  # like targets.MAX_TARGETS
-FEEDBACK_WHAT = 300
-
-
-def parse_targets(raw: Any, parts: tuple[str, ...]) -> list[dict]:
-    """Well-formed targets only (part in `parts`, a change described); checked against the page later (targets.clean_targets)."""
-    targets = []
-    for t in raw if isinstance(raw, list) else []:
-        if not isinstance(t, dict) or t.get("part") not in parts:
-            continue
-        what = js_trim(js_slice(" ".join(_str(t.get("what")).split()), 0, FEEDBACK_WHAT))
-        if what:
-            targets.append({"part": t["part"], "stage": js_slice(_str(t.get("stage")), 0, 80),
-                            "after": js_slice(_str(t.get("after")), 0, 80), "what": what})
-    return targets
-
-
-PICK_PARTS = (*FEEDBACK_PARTS, "remove")
-PICK_TARGETS = 20  # like feedback_pick.MAX_CARD_SECTIONS
-
-
-def parse_pick(p: Any) -> dict | None:
-    """FollowUp.pick: the parts a typed follow-up on a Playground or Quick read page changes, as /api/followup/pick (or the
-    reader's answer to its question) chose them: {targets, pageWide}. None when unusable."""
-    if not isinstance(p, dict):
-        return None
-    page_wide = p.get("pageWide") is True
-    targets = [] if page_wide else parse_targets(p.get("targets"), PICK_PARTS)[:PICK_TARGETS]
-    if not page_wide and not targets:
-        return None
-    return {"targets": targets, "pageWide": page_wide}
-
-
 PLAN_STEPS = 20  # like understand.MAX_STEPS
 PLAN_INTENTS = 30  # understand.MAX_INTENTS, plus knock-ons
 # understand.OPS without "revert" (an undo never reaches the pipeline: the app copies a version).
@@ -130,20 +90,34 @@ def parse_plan(p: Any) -> dict | None:
         if _str(i.get("unsure")).strip():
             item["unsure"] = js_slice(_str(i["unsure"]), 0, 200)
         sections.append(item)
+    v5 = p.get("v5")
+    # Follow-ups v5: the one agent (agent: true, with the conversation, the option the reader picked and the answer they got
+    # just before), or an older plan's brief (a record planned before the agent: the agent reads it as the earlier plan).
+    if isinstance(v5, dict) and (v5.get("agent") is True or _str(v5.get("brief")).strip()):
+        out5: dict = {}
+        if v5.get("agent") is True:
+            out5["agent"] = True
+        if v5.get("intent") in ("answer", "change"):  # Jev's call in the plan step (v5/intent.py)
+            out5["intent"] = v5["intent"]
+        # conversation: shared.history_text (HISTORY_TOTAL 24000 + its header); earlier: one whole turn (EARLIER_ANSWER_CHARS).
+        for k, n in (("brief", 2000), ("conversation", 26000), ("chose", 200), ("extra", 300)):
+            if _str(v5.get(k)).strip():
+                out5[k] = js_slice(_str(v5[k]).strip(), 0, n)
+        if isinstance(v5.get("base"), int) and not isinstance(v5["base"], bool) and v5["base"] >= 1:
+            out5["base"] = v5["base"]
+        refs = [r for r in v5.get("refs") or [] if isinstance(r, int) and not isinstance(r, bool) and r >= 1] if isinstance(v5.get("refs"), list) else []
+        if refs:
+            out5["refs"] = refs[:5]
+        if _str(v5.get("earlier")).strip():
+            out5["earlier"] = js_slice(_str(v5["earlier"]).strip(), 0, 8000)
+        return {"sections": sections, "steps": steps, "v5": out5}
+    v4 = p.get("v4")
+    if isinstance(v4, dict) and _str(v4.get("brief")).strip():  # follow-ups v4: one brief for the tool-using editor
+        out = {"brief": js_slice(_str(v4["brief"]).strip(), 0, 2000)}
+        if _str(v4.get("earlier")).strip():  # the answer the reader got just before asking for this change
+            out["earlier"] = js_slice(_str(v4["earlier"]).strip(), 0, 4000)
+        return {"sections": sections, "steps": steps, "v4": out}
     return {"sections": sections, "steps": steps} if sections or steps else None
-
-
-def parse_feedback_plan(fb: Any) -> dict | None:
-    """FollowUp.feedback (Feedback v2): the change the reader confirmed, {id, targets, keep, pageWide}. Only well-formed
-    targets are kept; the pipeline then checks them against the page (targets.clean_targets). None when unusable."""
-    if not isinstance(fb, dict) or not isinstance(fb.get("id"), str) or not FEEDBACK_ID.match(fb["id"]):
-        return None
-    targets = parse_targets(fb.get("targets"), FEEDBACK_PARTS)
-    keep = [js_slice(k, 0, 80) for k in fb.get("keep") if isinstance(k, str) and k.strip()][:20] if isinstance(fb.get("keep"), list) else []
-    page_wide = fb.get("pageWide") is True
-    if not page_wide and not targets:
-        return None
-    return {"id": fb["id"], "targets": [] if page_wide else targets[:FEEDBACK_TARGETS], "keep": keep, "pageWide": page_wide}
 
 
 def parse_follow_up(f: Any) -> dict | None | str:
@@ -173,23 +147,11 @@ def parse_follow_up(f: Any) -> dict | None | str:
         widgets = parse_widgets(f.get("widgets"))
         if widgets:
             out["widgets"] = widgets
-        if f.get("add") is True:  # "Add section": only add to the page (addsection.py; Quality+ only)
-            out["add"] = True
-        if f.get("feedback") is not None and not out.get("add"):  # Feedback v2: the change the reader confirmed
-            fb = parse_feedback_plan(f["feedback"])
-            if fb is None:
-                return "The feedback's change couldn't be read. Send the feedback again."
-            out["feedback"] = fb
-        if f.get("plan") is not None and not out.get("add") and not out.get("feedback"):  # /api/followup/plan's steps
+        if f.get("plan") is not None:  # /api/followup/plan's steps
             pl = parse_plan(f["plan"])
             if pl is None:
                 return "The change couldn't be read. Send your request again."
             out["plan"] = pl
-        if f.get("pick") is not None and not out.get("add") and not out.get("feedback") and not out.get("plan"):  # /api/followup/pick's choice
-            pk = parse_pick(f["pick"])
-            if pk is None:
-                return "The part to change couldn't be read. Send your request again."
-            out["pick"] = pk
         return out
     if f.get("kind") == "new":
         previous = _str(f.get("previous"))
@@ -200,29 +162,3 @@ def parse_follow_up(f: Any) -> dict | None | str:
         return {"kind": "new", "previous": previous, **({"source": source} if source else {})}
     return "Unknown follow-up."
 
-
-def parse_route(body: Any) -> dict | str:
-    body = body if isinstance(body, dict) else {}
-    text = js_trim(_str(body.get("text")))
-    if not text or js_len(text) > data.limits()["conceptChars"]:
-        return "Describe what you want."
-    stages = body.get("stages")
-    stages = [js_slice(s, 0, 80) for s in stages if isinstance(s, str)][:20] if isinstance(stages, list) else []
-    return {"text": text, "title": js_slice(_str(body.get("title")), 0, 200), "stages": stages}
-
-
-def route_follow_up(client: anthropic.Anthropic, req: dict) -> dict:
-    """One tiny structured-output call (about $0.0001). Anything unusable counts as "unclear", so the reader is asked."""
-    msg = client.messages.create(
-        model=HAIKU,
-        max_tokens=200,
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": data.formats()["route"]}},
-        system=cached_system(data.prompt("ROUTE_SYSTEM")),
-        messages=[{"role": "user", "content": f'Explainer above: "{req["title"]}"\nIts steps: {"; ".join(req["stages"])}\n\nThe reader\'s new message: {req["text"]}'}],
-    )
-    usd = price_of(msg.model, msg.usage)
-    try:
-        kind = json_parse(text_of(msg)).get("kind")
-        return {"kind": kind if kind in ("revise", "new") else "unclear", "usd": usd}
-    except Exception:
-        return {"kind": "unclear", "usd": usd}

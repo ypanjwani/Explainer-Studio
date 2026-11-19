@@ -14,15 +14,13 @@ export interface ModeInfo {
   howLong: string;
   /** The Thinking option applies (Haiku thinks before planning and building each playground). */
   thinking: boolean;
-  /** Review rounds apply (hidden in v1, MORE_OPTIONS). */
-  reviewRounds: boolean;
 }
 
 export const MODES: readonly ModeInfo[] = [
   { id: "lite-plus", name: "Reader", description: "A short page to read, with charts at fixed values. The fastest.",
-    howLong: "under a minute", thinking: false, reviewRounds: false },
+    howLong: "under a minute", thinking: false },
   { id: "playground", name: "Explorer", description: "A deep page where up to 4 sections get a hands-on playground: drag, click, play and watch it react. Tested and reviewed.",
-    howLong: "1–3 minutes", thinking: true, reviewRounds: true },
+    howLong: "1–3 minutes", thinking: true },
 ];
 
 /** The menu's choice the first time (and when a remembered choice is no longer on the menu). */

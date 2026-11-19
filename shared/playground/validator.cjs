@@ -466,6 +466,8 @@
               const parts = m.type === 'graph' ? [['node', m.nodes.length], ['edge', m.edges.length]]
                 : m.type === 'tree' ? [['node', countTree(m.root)]]
                 : m.type === 'matrix' ? [['cell', m.values.length * m.values[0].length]]
+                : m.type === 'table' ? [['cell', m.rows.length * m.columns.length]]
+                : m.type === 'drawing' ? [['item', m.items.length]]
                 : m.type === 'sequence' ? [['item', m.tokens.length]]
                 : m.type === 'shape' ? [['node', 1]]
                 : m.type === 'grid' ? [['cell', m.cells.length * m.cells[0].length]] : [];
@@ -551,7 +553,7 @@
   // with no room, cut labels, link labels on shapes, a series drawn mostly outside the y range, a mostly empty x range.
   // Measured with the renderer's own geometry (structures.chartFrame / shapeGeom / linkGeom), so they match the page.
   const SERIES = new Set(['line', 'points', 'area', 'bars']);
-  const NO_SPACE_CHECK = new Set(['heatmap', 'graph', 'tree', 'matrix', 'sequence', 'grid', 'pie', 'shape', 'link']);
+  const NO_SPACE_CHECK = new Set(['heatmap', 'graph', 'tree', 'matrix', 'table', 'drawing', 'sequence', 'grid', 'pie', 'shape', 'link']);
   const r1 = (v) => Math.round(v * 10) / 10;
   const r2 = (v) => +Number(v).toPrecision(3);
 
@@ -891,6 +893,8 @@
         if (m.type === 'graph' && Array.isArray(m.nodes)) m.nodes.slice(0, 12).forEach((nd) => nd && add(nd.label));
         if (m.type === 'sequence' && Array.isArray(m.tokens)) m.tokens.slice(0, 12).forEach(add);
         if (m.type === 'matrix') [m.rowLabels, m.colLabels].forEach((ls) => Array.isArray(ls) && ls.slice(0, 6).forEach(add));
+        if (m.type === 'table' && Array.isArray(m.columns)) m.columns.slice(0, 8).forEach(add);
+        if (m.type === 'drawing' && Array.isArray(m.items)) { add(m.label); m.items.filter((it) => it && it.tag === 'text').slice(0, 8).forEach((it) => add(it.text)); }
         if (m.type === 'tree' && m.root) {
           const walk = (nd, depth) => { if (!nd || depth > 3) return; add(nd.label); add(nd.edge); (nd.children || []).slice(0, 4).forEach((ch) => walk(ch, depth + 1)); };
           walk(m.root, 0);

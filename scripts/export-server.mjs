@@ -1,14 +1,14 @@
 // Builds the data the Flask server reads from the TypeScript sources, so the
 // two never drift: the built system prompts (prompts/prompts.ts), output
 // formats and tool definitions (prompts/formats.ts), the block/outline schemas
-// as a plain tree (shared/spec.ts, shared/lab.ts), the menus and the limits.
+// as a plain tree (shared/spec.ts), the menus and the limits.
 // Output: server/explainer/generated/*.json and server/tests/fixtures/sample.json (committed).
 //
 //   node scripts/export-server.mjs           write the files
 //   node scripts/export-server.mjs --check   fail if they are out of date
 //
-// Run it after any change to prompts/, the zod schemas in shared/spec.ts or
-// shared/lab.ts, shared/menus.ts, or LIMITS.
+// Run it after any change to prompts/, the zod schemas in shared/spec.ts,
+// shared/menus.ts, or LIMITS.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -24,7 +24,6 @@ try {
   const prompts = await load("/prompts/prompts.ts");
   const formats = await load("/prompts/formats.ts");
   const spec = await load("/shared/spec.ts");
-  const lab = await load("/shared/lab.ts");
   const menus = await load("/shared/menus.ts");
   const validate = await load("/shared/validate.ts");
   const factcheck = await load("/shared/factcheck.ts");
@@ -57,8 +56,6 @@ try {
     outline: tree(spec.Outline),
     promptOutline: tree(spec.PromptOutline),
     design: tree(spec.Design),
-    brief: tree(lab.Brief),
-    labWritten: lab.LAB_WRITTEN,
   };
 
   const plain = (o) => JSON.parse(JSON.stringify(o));
@@ -71,7 +68,7 @@ try {
     WIDGET_MAX_CHARS: validate.WIDGET_MAX_CHARS,
     MAX_CLAIMS: factcheck.MAX_CLAIMS,
   };
-  const formatData = plain({ ...formats.FORMATS, computeTool: formats.COMPUTE_TOOL, editTools: formats.EDIT_TOOLS });
+  const formatData = plain({ ...formats.FORMATS, computeTool: formats.COMPUTE_TOOL });
 
   const files = {
     "prompts.json": promptStrings,

@@ -127,14 +127,14 @@ def fake_pipeline(monkeypatch, fail: bool = False):
             raise RuntimeError("boom")
         steps = [{"step": "plan", "model": "claude-haiku-5-5", "input": 100, "output": 50, "cacheRead": 900, "cacheWrite": 0, "usd": 0.006}]
         return {"spec": {"title": "Dropout, explained", "stages": []}, "usage": {"quality": "quality-plus", "effort": "low", "steps": steps, "totalUsd": 0.006, "seconds": 3}}
-    monkeypatch.setattr(ai, "generate", generate)
+    monkeypatch.setattr(ai.modes, "generate", generate)
 
 
 def events(res) -> list[dict]:
     return [json.loads(line[6:]) for line in res.get_data(as_text=True).splitlines() if line.startswith("data: ")]
 
 
-CONCEPT = {"mode": "concept", "text": "How does dropout work?", "quality": "quality-plus"}
+CONCEPT = {"mode": "concept", "text": "How does dropout work?", "quality": "playground"}
 
 
 def test_parallel_starts_respect_the_limits(tmp_path):
@@ -200,15 +200,15 @@ def test_internal_errors_stay_on_the_server(client, monkeypatch):
     """Audit F06, through the routes: the JSON 502 body and the SSE error event carry no exception text."""
     def boom(client_, req):
         raise RuntimeError("upstream timeout after tokens were billed")
-    monkeypatch.setattr(ai, "route_follow_up", boom)
+    monkeypatch.setattr(ai, "formula_turn", boom)
     a = signup(client)
-    r = client.post("/api/route", json={"text": "x", "title": "T", "stages": ["a"]}, headers=a)
+    r = client.post("/api/formula", json={"latex": "x"}, headers=a)
     body = r.get_json()
     assert r.status_code == 502 and "tokens were billed" not in body["error"] and body["requestId"]
 
     def gen(client_, req, emit, **kw):
         raise KeyError("stages_internal_field")
-    monkeypatch.setattr(ai, "generate", gen)
+    monkeypatch.setattr(ai.modes, "generate", gen)
     last = events(client.post("/api/generate", json=CONCEPT, headers=a))[-1]
     assert last["type"] == "error" and "stages_internal_field" not in last["message"] and "reference" in last["message"]
 
@@ -222,7 +222,7 @@ def test_generation_saves_to_history(client, app, monkeypatch):
     # Saved by the server itself: a reader who closed the tab finds the finished explainer.
     stored = client.get("/api/explainers/rec1", headers=a).get_json()
     assert stored["status"] == "done" and stored["title"] == "Dropout, explained" and stored["usage"]["totalUsd"] == 0.006
-    assert stored["steps"]["plan"] == {"status": "done"}
+    assert stored["steps"]["plan"]["status"] == "done" and stored["steps"]["plan"]["at"] > 0
     me = client.get("/api/auth/me", headers=a).get_json()["allowance"]
     assert me["generationsUsed"] == 1 and me["usdUsed"] == 0.006
 
@@ -242,7 +242,7 @@ def test_failed_generation_still_counts_its_spend(client, monkeypatch):
     def generate(client, req, emit, usage=None, **kw):
         usage.add("plan", "claude-haiku-5-5", {"input_tokens": 20_000, "output_tokens": 8_000})  # spent before it failed
         raise RuntimeError("bad model JSON")
-    monkeypatch.setattr(ai, "generate", generate)
+    monkeypatch.setattr(ai.modes, "generate", generate)
     a = signup(client)
     assert events(client.post("/api/generate", json=CONCEPT, headers=a))[-1]["type"] == "error"
     allowance = client.get("/api/auth/me", headers=a).get_json()["allowance"]
@@ -256,9 +256,14 @@ def test_live_progress_and_dead_generations(client, app):
     client.put("/api/explainers/rec1", json=record(status="generating", spec=None), headers=a)
     history.start_generation(db, user_id, "rec1")
     history.generation_event(db, user_id, "rec1", {"type": "step", "step": "plan", "status": "running"})
-    # While it runs, a reload sees its progress.
+    # While it runs, a reload sees its progress, with when each step started (the app's progress ring times it).
     got = client.get("/api/explainers/rec1", headers=a).get_json()
-    assert got["status"] == "generating" and got["steps"] == {"plan": {"status": "running"}}
+    started = got["steps"]["plan"]["at"]
+    assert got["status"] == "generating" and got["steps"] == {"plan": {"status": "running", "at": started}}
+    # Done keeps the start time and stores the locked card's preview.
+    history.generation_event(db, user_id, "rec1", {"type": "step", "step": "plan", "status": "done", "preview": {"title": "T", "subtitle": "S"}})
+    got = client.get("/api/explainers/rec1", headers=a).get_json()
+    assert got["steps"]["plan"] == {"status": "done", "at": started, "preview": {"title": "T", "subtitle": "S"}}
     # A generation whose worker died (no progress for 10 minutes) becomes a retryable error.
     with db.session() as s:
         s.get(Generation, (user_id, "rec1")).updated_at = now_ms() - history.STALE_MS - 1
@@ -293,6 +298,9 @@ def test_bad_record_id(client, monkeypatch):
 
 
 def test_daily_generation_quota(client, monkeypatch):
+    # With the first-message step on (the default) a new page past the day's explainers only answers (test_intake.py);
+    # the plain refusal is what's left when it's off.
+    monkeypatch.setenv("FIRST_TALK", "0")
     fake_pipeline(monkeypatch)
     monkeypatch.setattr(ai, "GEN_LIMIT", ai.parse_limit("100/minute"))
     app_settings = client.application.extensions["explainer"]
@@ -316,12 +324,12 @@ def test_spend_and_concurrency_caps(client, app):
         quota.start_generation(c.settings, db, user_id)
     assert e.value.code == "too_many_running"
     quota.finish_generation(db, ids[0], 0.30)  # over the $0.25 daily allowance
-    r = client.post("/api/route", json={"text": "make it shorter", "title": "T", "stages": ["a"]}, headers=a)
+    r = client.post("/api/formula", json={"latex": "x"}, headers=a)
     assert r.status_code == 429 and r.get_json()["code"] == "quota_exceeded"
     # Everyone's spend together: past the global cap, new readers are turned away too (503).
     with db.session() as s:
         s.add(UsageEvent(user_id=user_id, kind="generate", usd=c.settings.global_daily_usd))
-    r = client.post("/api/route", json={"text": "x", "title": "T", "stages": ["a"]}, headers=signup(client, "new@example.com"))
+    r = client.post("/api/formula", json={"latex": "x"}, headers=signup(client, "new@example.com"))
     assert r.status_code == 503 and r.get_json()["code"] == "capacity"
 
 
@@ -338,11 +346,11 @@ def test_deleted_account_spend_stays_in_global_cap(client, app):
     with db.session() as s:
         assert s.query(UsageEvent).filter(UsageEvent.user_id.is_(None)).count() == 1
     # A new account from another network is still turned away: the global cap was reached.
-    r = client.post("/api/route", json={"text": "x", "title": "T", "stages": ["a"]},
+    r = client.post("/api/formula", json={"latex": "x"},
                     headers=_signup_from(client, "new@example.com", "198.51.100.1"))
     assert r.status_code == 503 and r.get_json()["code"] == "capacity"
     # The same address re-registered hits its own daily allowance first: the deleted account's spend is still its (F25).
-    r = client.post("/api/route", json={"text": "x", "title": "T", "stages": ["a"]},
+    r = client.post("/api/formula", json={"latex": "x"},
                     headers=_signup_from(client, "reader@example.com", "192.0.2.1"))
     assert r.status_code == 429 and r.get_json()["code"] == "quota_exceeded"
 
@@ -367,19 +375,19 @@ def test_network_spend_cap(client, app):
     c = app.extensions["explainer"]
     db = db_of(app)
     object.__setattr__(c.settings, "network_daily_usd", 0.40)
-    route = {"text": "x", "title": "T", "stages": ["a"]}
+    body = {"latex": "x"}  # any signed-in AI call; /api/formula is a small one
     a = _signup_from(client, "a@example.com", "203.0.113.7")
     b = _signup_from(client, "b@example.com", "203.0.113.99")  # same /24
     other = _signup_from(client, "c@example.com", "198.51.100.1")
     a_id = client.get("/api/auth/me", headers=a).get_json()["user"]["id"]
     quota.record(app.extensions["explainer"].settings, db, a_id, "chat", 0.20)
     quota.record(app.extensions["explainer"].settings, db, a_id, "chat", 0.20)  # A is at $0.40: their network's cap
-    r = client.post("/api/route", json=route, headers=b)  # B spent nothing but shares the network
+    r = client.post("/api/formula", json=body, headers=b)  # B spent nothing but shares the network
     assert r.status_code == 429 and "network" in r.get_json()["error"]
-    assert client.post("/api/route", json=route, headers=other).status_code != 429  # another network is fine
+    assert client.post("/api/formula", json=body, headers=other).status_code != 429  # another network is fine
     # Deleting A doesn't give the network its allowance back.
     assert client.delete("/api/auth/me", json={"password": "correct horse battery"}, headers=a).status_code == 200
-    assert client.post("/api/route", json=route, headers=b).status_code == 429
+    assert client.post("/api/formula", json=body, headers=b).status_code == 429
 
 
 def test_network_signup_cap(client, app):
@@ -407,12 +415,12 @@ def test_paper_cache(app):
 
 
 def test_pipeline_uses_paper_cache(monkeypatch):
-    """A cached paper skips the Jev filter and the summaries."""
-    from explainer import pipeline
+    """A cached paper skips the Jev filter and the summaries (Reader's pipeline, modes/)."""
+    from explainer.modes import common, reader
 
     calls: list[str] = []
-    monkeypatch.setattr(pipeline, "filter_sections", lambda *a, **k: calls.append("filter") or {"sections": a[2], "skipped": []})
-    monkeypatch.setattr(pipeline, "summarize", lambda *a, **k: calls.append("summarize") or "Summary of the method.")
+    monkeypatch.setattr(common, "filter_sections", lambda *a, **k: calls.append("filter") or {"sections": a[2], "skipped": []})
+    monkeypatch.setattr(common, "summarize", lambda *a, **k: calls.append("summarize") or "Summary of the method.")
 
     class Stop(Exception):
         pass
@@ -420,7 +428,7 @@ def test_pipeline_uses_paper_cache(monkeypatch):
     def stop_at_plan(*a, **k):
         raise Stop()
 
-    monkeypatch.setattr(pipeline, "write_outline", stop_at_plan)
+    monkeypatch.setattr(reader, "write_outline", stop_at_plan)
 
     class Memory(dict):
         def get(self, k):  # type: ignore[override]
@@ -434,7 +442,7 @@ def test_pipeline_uses_paper_cache(monkeypatch):
     for _ in range(2):
         steps: list[dict] = []
         with pytest.raises(Stop):
-            pipeline.generate(None, req, steps.append, paper_cache=cache)
+            reader.generate(None, req, steps.append, paper_cache=cache)
     assert calls == ["filter", "summarize"]  # only the first run read the paper
     assert any("from cache" in (e.get("detail") or "") for e in steps)
 
@@ -461,21 +469,6 @@ def test_migrations_match_models(tmp_path, monkeypatch):
     with db.engine.connect() as conn:
         assert compare_metadata(MigrationContext.configure(conn), Base.metadata) == []
     db.engine.dispose()
-
-
-def test_review_rounds_get_what_is_left_of_the_allowance(client, app, monkeypatch):
-    # F07: the review loop is told the user's remaining budget, so it can stop instead of overshooting it.
-    seen = {}
-
-    def generate_deep(client, req, emit, usd_budget=None, **kw):
-        seen["budget"] = usd_budget
-        raise RuntimeError("stop here")
-    monkeypatch.setattr(ai, "generate_deep", generate_deep)
-    a = signup(client)
-    user_id = client.get("/api/auth/me", headers=a).get_json()["user"]["id"]
-    quota.record(app.extensions["explainer"].settings, db_of(app), user_id, "chat", 0.20)
-    events(client.post("/api/generate", json={**CONCEPT, "quality": "quality-deep"}, headers=a))
-    assert seen["budget"] == pytest.approx(app.extensions["explainer"].settings.daily_usd - 0.20)
 
 
 def test_a_failed_start_does_not_use_up_a_generation(client, monkeypatch):

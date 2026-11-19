@@ -1,6 +1,6 @@
 """Retry ("↻ Retry" in the app): the replaced page's titles and theme travel as `avoid`."""
 
-from explainer.pipeline import avoid_hint, other_theme
+from explainer.modes.common import avoid_hint, other_theme
 from explainer.requests import parse_generate
 
 

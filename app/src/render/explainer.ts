@@ -54,23 +54,17 @@ export interface ExplainerOptions {
   toolbar?: HTMLElement[];
   /** Optional chat panel; shown in a drawer toggled by a floating button. */
   chat?: HTMLElement | null;
-  /** Edit chat (app only, never in exported pages): adds an Edit button to every part except AI-written widgets. */
-  onEditBlock?(stageIndex: number, blockIndex: number): void;
-  /** The part open in Edit chat, highlighted. */
-  editing?: { stage: number; block: number };
-  /** Edit chat panel (app only): a second tab in the chat drawer, next to "Ask". */
-  edit?: HTMLElement | null;
   /** Section tools that call the server (spec.sectionTools; app only, never in exported pages): the app opens their panel. */
   onSectionTool?(stageIndex: number, kind: SectionTool, button: HTMLElement): void;
   /** "Go deeper" on a formula with no saved note (app only): writes one (POST /api/formula) and saves it on the page
    * (spec.formulaNotes). Without it, only formulas with a saved note get the button (exports). */
   loadFormulaNote?(stageIndex: number, block: Extract<Block, { type: "formula" }>, signal: AbortSignal): Promise<FormulaNote>;
-  /** Drawer state to start in (kept by the app across the re-render after each edit). */
+  /** Drawer state to start in (kept by the app across re-renders of the same explainer). */
   drawer?: DrawerState;
   onDrawer?(d: DrawerState): void;
 }
 
-export interface DrawerState { open: boolean; tab: "ask" | "edit" }
+export interface DrawerState { open: boolean }
 
 const SECTION_TOOL_LABEL: Record<SectionTool, string> = { search: "🔎 Search the web" };
 const SECTION_TOOL_HINT: Record<SectionTool, string> = { search: "Search the web about this section with AI, with sources" };
@@ -79,28 +73,6 @@ const LEVEL_LABEL = { beginner: "Beginner friendly", student: "Student level", p
 
 /** Store is per spec object, so slider values survive page changes. */
 const stores = new WeakMap<ExplainerSpec, Store>();
-
-/** The live variables of a rendered explainer (Edit chat reads them to save presets). */
-export const storeFor = (spec: ExplainerSpec) => stores.get(spec);
-
-/**
- * After an edit (a new spec object), keep the reader's slider and switch
- * positions for every control that still exists and still accepts the value.
- */
-export function inheritState(from: ExplainerSpec, to: ExplainerSpec) {
-  const old = stores.get(from);
-  if (!old) return;
-  const store = stores.get(to) ?? new Store(to);
-  stores.set(to, store);
-  for (const st of to.stages)
-    for (const b of st.blocks) {
-      const v = old.get(b.type === "slider" || b.type === "choice" || b.type === "toggle" ? b.var : "");
-      if (!Number.isFinite(v)) continue;
-      if (b.type === "slider" && v >= b.min && v <= b.max) store.set(b.var, v);
-      if (b.type === "choice" && b.options.some((o) => o.value === v)) store.set(b.var, v);
-      if (b.type === "toggle") store.set(b.var, v);
-    }
-}
 
 export function renderExplainer(root: HTMLElement, o: ExplainerOptions): () => void {
   const { spec } = o;
@@ -183,15 +155,6 @@ export function renderExplainer(root: HTMLElement, o: ExplainerOptions): () => v
         deeper: b.type === "formula" ? deeperFor(stageIndex, b) : undefined,
       };
       const el = renderBlock(b, ctx);
-      if (o.onEditBlock && b.type !== "widget") {
-        el.classList.add("is-editable");
-        el.dataset.edit = `${stageIndex}:${i}`;
-        if (o.editing?.stage === stageIndex && o.editing.block === i) el.classList.add("is-editing");
-        el.append(h("button.x-edit-btn", {
-          type: "button", title: "Edit this part", "aria-label": "Edit this part",
-          onclick: (e: Event) => { e.stopPropagation(); o.onEditBlock!(stageIndex, i); },
-        }, "✏️ Edit"));
-      }
       return [...copies, el];
     }));
   }
@@ -396,31 +359,21 @@ export function renderExplainer(root: HTMLElement, o: ExplainerOptions): () => v
   }
   frame.append(h("div.x-page", null, page));
 
-  // The drawer: "Ask about this" (tutor bot) and, in the app, Edit chat as a second tab.
-  if (o.chat || o.edit) {
-    const state: DrawerState = { open: false, tab: o.chat ? "ask" : "edit", ...o.drawer };
-    if (!o.edit) state.tab = "ask";
-    if (!o.chat) state.tab = "edit";
-    const panes = { ask: o.chat ? h("div.x-drawer-pane", { "data-pane": "ask" }, o.chat) : null, edit: o.edit ? h("div.x-drawer-pane", { "data-pane": "edit" }, o.edit) : null };
-    const tabBtn = (t: DrawerState["tab"], label: string) => h("button.x-drawer-tab", { type: "button", role: "tab", onclick: () => set({ tab: t }) }, label);
-    const tabs = o.chat && o.edit ? h("div.x-drawer-tabs", { role: "tablist" }, tabBtn("ask", "💬 Ask"), tabBtn("edit", "✏️ Edit")) : null;
-    const drawer = h("aside.x-chat-drawer", { "aria-label": !o.chat ? "Edit this explainer" : o.edit ? "Ask about or edit this explainer" : "Ask about this explainer" }, tabs, panes.ask, panes.edit);
-    const fab = !o.chat
-      ? h("button.x-chat-fab", { type: "button", "aria-expanded": "false" }, h("span", { "aria-hidden": "true" }, "✏️"), " Edit")
-      : h("button.x-chat-fab", { type: "button", "aria-expanded": "false" }, h("span", { "aria-hidden": "true" }, "💬"), o.edit ? " Ask · ✏️ Edit" : " Ask about this");
+  // The drawer: "Ask about this" (tutor bot).
+  if (o.chat) {
+    const state: DrawerState = { open: false, ...o.drawer };
+    const pane = h("div.x-drawer-pane", { "data-pane": "ask" }, o.chat);
+    const drawer = h("aside.x-chat-drawer", { "aria-label": "Ask about this explainer" }, pane);
+    const fab = h("button.x-chat-fab", { type: "button", "aria-expanded": "false" }, h("span", { "aria-hidden": "true" }, "💬"), " Ask about this");
     function set(d: Partial<DrawerState>, notify = true) {
       Object.assign(state, d);
       frame.classList.toggle("chat-open", state.open);
       fab.setAttribute("aria-expanded", String(state.open));
-      for (const [t, p] of Object.entries(panes)) p?.toggleAttribute("hidden", t !== state.tab);
-      tabs?.querySelectorAll<HTMLElement>(".x-drawer-tab").forEach((b, i) => b.setAttribute("aria-selected", String((i === 0 ? "ask" : "edit") === state.tab)));
       if (notify) o.onDrawer?.({ ...state });
-      if (state.open && d.open && state.tab === "ask") panes.ask?.querySelector("textarea")?.focus();
+      if (state.open && d.open) pane.querySelector("textarea")?.focus();
     }
     fab.addEventListener("click", () => set({ open: !state.open }));
     drawer.addEventListener("x-close", () => set({ open: false }));
-    // The app opens the Edit tab when the reader clicks ✏️ Edit on a part.
-    frame.addEventListener("x-drawer", (e) => set((e as CustomEvent<Partial<DrawerState>>).detail));
     frame.append(fab, drawer);
     set({}, false);
   }

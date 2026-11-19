@@ -105,17 +105,21 @@ def _rejected(res: dict, label: str, kind: str, plan: dict, html: str, scores: d
                                            "lesson": str(plan.get("lesson") or ""), "html": html, "scores": scores})
 
 
-def snap_widget(html: str) -> list[dict] | None:
+def snap_widget(html: str, theme: dict | None = None, max_frames: int | None = None) -> list[dict] | None:
     """Screenshots of the widget as the page shows it (scripts/snap-widget.mjs: start, each slider at min and max, a
     menu's last option, ~1 s after Play): [{"label", "png"}] (png base64), or None when they can't be taken (no node,
     no Playwright or browser, a crash). This check is an extra on top of the code checks, so it fails open: no frames =
-    the widget is kept as it is."""
+    the widget is kept as it is. theme: {"mode": "light"|"dark", "palette"} = the page's own colours (default: light);
+    max_frames: at most that many frames (default 6)."""
     node = _node()
     if not node or not SNAP_SCRIPT.exists():
         return None
+    stdin = html
+    if theme or max_frames:
+        stdin = json.dumps({"html": html, **(theme or {}), **({"maxFrames": max_frames} if max_frames else {})}, ensure_ascii=False)
     with _SNAP_SLOTS:
         try:
-            proc = run_node([node, str(SNAP_SCRIPT)], html, SNAP_TIMEOUT)
+            proc = run_node([node, str(SNAP_SCRIPT)], stdin, SNAP_TIMEOUT)
             out = json.loads(proc.stdout.strip().splitlines()[-1])
         except Exception:
             log.exception("Code Lab: the widget screenshots failed")
@@ -128,7 +132,7 @@ def snap_widget(html: str) -> list[dict] | None:
 
 
 def look_review(client: anthropic.Anthropic, usage: UsageLog, frames: list[dict], plan: dict | None, title: str,
-                checked: str | None = None, step: str = "code lab look") -> list[str] | None:
+                checked: str | None = None, step: str = "code lab look", effort: str = "medium") -> list[str] | None:
     """Haiku reads the frames (in order, each with its caption) and lists what a reader would see is wrong (up to 4).
     [] = it looks fine; None = the call failed. Thinking on, medium: on saved widgets it removed the false alarms that
     thinking-off answers had, for ~$0.0004 a widget (a false alarm costs a repair of a working widget)."""
@@ -141,7 +145,7 @@ def look_review(client: anthropic.Anthropic, usage: UsageLog, frames: list[dict]
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": f["png"]}})
     try:
         text = write_text(client, usage, step, system=data.prompt("CODE_LAB_LOOK_SYSTEM"), user=content,
-                          max_tokens=LOOK_TOKENS, fmt=data.formats()["codeLabLook"], effort="medium", model=HAIKU, thinking=True)
+                          max_tokens=LOOK_TOKENS, fmt=data.formats()["codeLabLook"], effort=effort, model=HAIKU, thinking=True)
         reply, _ = extract_json(text)
     except Exception:
         log.exception("Code Lab: the look check failed")
@@ -212,6 +216,47 @@ def check_playground(spec: Any) -> dict:
         errors = [str(e) for e in result.get("errors") or []]
         return {"problems": errors or ["the checker rejected it without saying why: keep it simple and standard"], "facts": None}
     return {"problems": [CHECK_FAILED], "facts": None}
+
+
+READ_SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "read-playground.mjs"
+
+
+READINGS_CHARS = 3000
+
+
+def read_playground(spec: Any, runs: list[dict] | None = None, max_chars: int = READINGS_CHARS) -> dict | None:
+    """What the playground really shows (Nov 13 2026; scripts/read-playground.mjs, shared/playground/readings.cjs): each
+    run's readout values and a summary of each chart's marks (lines: first/last, min/max and shape; bars: their values;
+    heatmaps, tables, text ...). runs: [{set?: {stateKey: value}, play?: ticks, press?: {buttonId: times}, label?}];
+    without them the start, each slider's ends, each select option, a toggle flipped, Play and button presses.
+    Returns {"runs": [...], "text": "<formatted for a prompt>"}, or None when it can't run: readings are evidence for
+    the AI, never a gate, so they fail open (unlike check_playground)."""
+    if not isinstance(spec, dict):
+        return None
+    node = _node()
+    if not node or not READ_SCRIPT.exists():
+        log.warning("Playground readings: node or %s is missing", READ_SCRIPT.name)
+        return None
+    payload = json.dumps({"spec": spec, **({"runs": runs} if runs else {}), "maxChars": max_chars}, ensure_ascii=False)
+    proc = None
+    try:
+        proc = run_node([node, str(READ_SCRIPT)], payload, CHECK_TIMEOUT)
+        result = json.loads(proc.stdout.strip().splitlines()[-1])
+    except subprocess.TimeoutExpired:
+        return {"runs": [], "text": "Couldn't run it: it took too long."}
+    except Exception:
+        log.error("Playground readings failed to run: %s", node_failure(proc))
+        return None
+    if not isinstance(result, dict):
+        return None
+    if result.get("error"):
+        return {"runs": [], "text": f"Couldn't run it: {str(result['error'])[:200]}"}
+    return {"runs": result.get("runs") or [], "text": str(result.get("text") or "")[:max_chars]}
+
+
+def readings_text(readings: dict | None) -> str:
+    """The readings as prompt lines ("" when there are none)."""
+    return str((readings or {}).get("text") or "")
 
 
 def playground_plan(spec: dict) -> dict:
