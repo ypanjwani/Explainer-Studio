@@ -11,6 +11,9 @@ Tables:
   paper_cache     a paper's section filter and summaries, keyed by a hash of its text, shared by every user
   page_index      a page's map for follow-ups v2 (page_index.py), keyed by a hash of the page
   shares          a public "Share link" (/s/<id>): a copy of one explainer's spec, one per (user, record)
+  page_versions   every version of a page (versions.py): the whole page gzip-compressed, its parent and a short log
+  page_lines      one per page line (a page and its revisions): the next version number, never reused
+  section_notes   each section's part of a main file (modes/followup/main_file.py), per user, keyed by its content
 
 Schema changes go through Alembic (server/migrations); tests build the tables with create_all.
 """
@@ -22,7 +25,7 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator
 
-from sqlalchemy import JSON, BigInteger, Boolean, Float, ForeignKey, Index, Integer, String, create_engine, event
+from sqlalchemy import JSON, BigInteger, Boolean, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -94,9 +97,13 @@ class Generation(Base):
     steps: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     spec: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     usage: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # Also carries a follow-up's answer, question or new-topic reply (prefixes in history.py), so it is Text (migration 0012):
+    # at String(1000) answers were cut mid-word.
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
     updated_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+    # The version this run makes (history.version_meta): {line, base, kind, number?, request}, plus "version" once saved.
+    meta: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
 class UsageEvent(Base):
@@ -182,6 +189,49 @@ class Share(Base):
     size: Mapped[int] = mapped_column(Integer, default=0)  # bytes of spec
     created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
     updated_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+
+
+class PageLine(Base):
+    """One page line: a page (a new explainer, or a new-topic page in a conversation) and all its revisions. Its id is
+    the line's first record id. next_version only grows, so a number is never reused, even after a delete."""
+    __tablename__ = "page_lines"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    line: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread: Mapped[str | None] = mapped_column(String(64), nullable=True)  # the conversation it belongs to
+    next_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+
+
+class PageVersion(Base):
+    """One version of a page (versions.py). The whole page, gzip-compressed canonical JSON. A deleted record's version
+    is a tombstone: payload cleared, the row (number, parent, log, section ids) kept."""
+    __tablename__ = "page_versions"
+    __table_args__ = (Index("ix_page_versions_user_record", "user_id", "record_id"),)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    line: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    record_id: Mapped[str] = mapped_column(String(64))
+    parent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    kind: Mapped[str] = mapped_column(String(10))  # new | change | revert
+    payload: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    main_file: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)  # follow-ups v5 phase 2
+    section_ids: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    log: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    size: Mapped[int] = mapped_column(Integer, default=0)  # bytes of payload, for the per-user storage cap
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+    updated_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+
+
+class SectionNote(Base):
+    """Follow-ups v5 (modes/followup/main_file.py): one section's part of a main file (code part, playground readings,
+    AI meaning), keyed by a hash of the section's content. Per user (deleted with the account); pruned when unused."""
+    __tablename__ = "section_notes"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    note: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
+    used_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
 
 
 class Database:

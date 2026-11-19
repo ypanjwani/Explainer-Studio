@@ -15,7 +15,7 @@ from explainer.routes import ai
 from explainer.routes import auth as auth_routes
 
 PW = "correct horse battery"
-CONCEPT = {"mode": "concept", "text": "How does dropout work?", "quality": "quality-plus"}
+CONCEPT = {"mode": "concept", "text": "How does dropout work?", "quality": "playground"}
 
 
 def db_of(app):
@@ -40,8 +40,7 @@ def capture_generate(monkeypatch) -> list[dict]:
         seen.append(req)
         return {"spec": {"title": "T", "stages": []}, "usage": {"quality": req["quality"], "effort": "low", "steps": [], "totalUsd": 0.0, "seconds": 1},
                 "rejected": ["w"], "versions": ["v"]}
-    monkeypatch.setattr(ai, "generate", generate)
-    monkeypatch.setattr(ai, "generate_deep", generate)
+    monkeypatch.setattr(ai.modes, "generate", generate)
     monkeypatch.setattr(ai.modes, "generate", generate)  # Reader and Explorer's own pipelines
     return seen
 
@@ -52,20 +51,6 @@ def usage_rows(app, kind: str) -> list[UsageEvent]:
 
 
 # ---------- F09 / F10: hidden modes and debug flags ----------
-
-
-@pytest.mark.parametrize("mode", ai.HIDDEN_MODES)
-def test_hidden_modes_run_as_quality_plus(client, monkeypatch, mode):
-    seen = capture_generate(monkeypatch)
-    events(client.post("/api/generate", json={**CONCEPT, "quality": mode}, headers=signup(client)))
-    assert seen[0]["quality"] == "quality-plus"
-
-
-def test_hidden_modes_allowed_for_scripts(client, app, monkeypatch):
-    app.extensions["explainer_ai"]["allow_hidden_modes"] = True
-    seen = capture_generate(monkeypatch)
-    events(client.post("/api/generate", json={**CONCEPT, "quality": "code-lab-2"}, headers=signup(client)))
-    assert seen[0]["quality"] == "code-lab-2"
 
 
 def test_debug_flags_ignored_unless_allowed(client, app, monkeypatch):
@@ -113,7 +98,7 @@ def test_deleting_a_record_stops_its_generation(client, app, monkeypatch):
         emit({"type": "step", "step": "assemble", "status": "running"})
         reached.append("after delete")  # must never run
         return {}
-    monkeypatch.setattr(ai, "generate", generate)
+    monkeypatch.setattr(ai.modes, "generate", generate)
     last = events(client.post("/api/generate", json={**CONCEPT, "recordId": "rec1"}, headers=a))[-1]
     assert reached == [] and last["type"] == "error" and "deleted" in last["message"]
     ev = usage_rows(app, "generate-failed")

@@ -10,7 +10,7 @@
 // hand-typed copies...), random formula-language expressions, synthetic papers
 // for the reference cut, and numbers for JS number formatting. Re-run it after
 // changing any of shared/{spec,validate,expr,views,compact,references,examples,
-// factcheck,edit,lab}.ts and update the Python port until the tests pass.
+// factcheck,edit}.ts and update the Python port until the tests pass.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -45,7 +45,6 @@ try {
   const refs = await load("/shared/references.ts");
   const examples = await load("/shared/examples.ts");
   const fc = await load("/shared/factcheck.ts");
-  const lab = await load("/shared/lab.ts");
   const sample = await load("/shared/sample.ts");
   const followup = await load("/shared/followup.ts");
   mkdirSync(OUT, { recursive: true });
@@ -306,30 +305,6 @@ try {
   }
   write("compact", compactCases);
 
-  // ---------- Freeform+ briefs ----------
-  const labCases = [];
-  for (const { outline } of bases.slice(0, 10)) {
-    for (let k = 0; k < 3; k++) {
-      const o = clone(outline);
-      for (const st of o.stages) {
-        if (!st.blocks.length) continue;
-        const i = Math.floor(rand() * st.blocks.length);
-        st.blocks.splice(i, 0, pick([
-          { type: "interactive", goal: "g", math: "m", insight: "i" },
-          { type: "interactive", goal: "g", math: "m", insight: "i", scenarios: ["a", "b"] },
-          { type: "interactive", goal: 5, math: "m" },
-          { type: "interactive", goal: "g", math: "m", insight: "i", scenarios: "x" },
-          { type: "table", rows: "nope" },
-        ]));
-      }
-      const parsed = lab.parseLabOutline(JSON.parse(JSON.stringify(o)));
-      const refsOf = "outline" in parsed ? lab.briefsOf(parsed.outline) : [];
-      const bundles = new Map(refsOf.filter(() => chance(0.6)).map((r) => [r.key, [{ type: "text", md: `Built ${r.key}` }]]));
-      labCases.push({ raw: o, parsed: enc(parsed), briefs: refsOf, bundles: [...bundles], merged: "outline" in parsed ? lab.mergeBundles(parsed.outline, bundles) : null });
-    }
-  }
-  write("lab", labCases);
-
   // ---------- references ----------
   const body = (n, word = "The model learns a representation of the input and we evaluate it carefully.") => Array.from({ length: n }, () => word).join("\n");
   const ieee = (n) => Array.from({ length: n }, (_, i) => `[${i + 1}] M. Islam, M. Hossain, and M. A. Rahman, "Some Method for Plant Disease," IEEE Access, vol. 11, pp. ${i}-${i + 9}, 2023.`).join("\n");
@@ -400,7 +375,7 @@ try {
     precision: [1, 2, 3, 4, 6].map((p) => n.toPrecision(p)),
   })));
 
-  console.log(`Wrote parity corpus to ${OUT}: ${outlineCases.length} outlines, ${specCases.length} specs, ${compactCases.length} compact texts, ${labCases.length} lab outlines, ${exprCases.length} expressions.`);
+  console.log(`Wrote parity corpus to ${OUT}: ${outlineCases.length} outlines, ${specCases.length} specs, ${compactCases.length} compact texts, ${exprCases.length} expressions.`);
 } finally {
   await vite.close();
 }

@@ -531,3 +531,52 @@ def audit_duplicates(jev_key: str | None, labels: list[str], widgets: list[dict]
             out.append((b, a))
             dropped.add(b)
     return out
+
+
+# ---------- the text against what its playground really shows (Nov 13 2026) ----------
+
+READINGS_LOW = 0.2  # at or below: a clear no (like PG_REVIEW_LOW)
+
+
+READINGS_CHARS = 4000  # all of a section's playground readings for Jev, cut to this
+
+
+READINGS_QUESTIONS = {
+    "numbers_agree": _noul(
+        "Do the numbers the section's text states about its interactive part agree with `playgrounds[].readings` (what the playground really shows at the settings listed)?",
+        "Every number the text gives for something the playground shows (a value, an error, a count, a probability, where a curve peaks or crosses) matches the readings at the same setting, allowing for rounding. A number the text gives for a setting the readings don't cover counts as agreeing.",
+        "The text gives a number for a setting the readings cover, and the readings show a clearly different number there."),
+    "trends_agree": _noul(
+        "Do the trends and comparisons the section's text describes agree with `playgrounds[].readings`?",
+        "Everything the text says changes in a direction (rises, falls, peaks, levels off, grows faster) or compares (A above B, larger, smaller, crosses) is what the readings show when the setting moves that way. A claim about something the readings don't cover counts as agreeing.",
+        "The text says something rises, falls, peaks or compares one way, and the readings show it doing clearly otherwise (the opposite direction, no change, the other one larger)."),
+}
+
+
+READINGS_PROBLEMS = {
+    "numbers_agree": "a number the text states isn't what its playground shows",
+    "trends_agree": "a trend or comparison the text describes isn't what its playground shows",
+}
+
+
+def readings_contradict(jev_key: str | None, st: dict, readings: list[dict], usage: UsageLog) -> str | None:
+    """None when the section's text agrees with what its playgrounds really show (readings: [{"title", "readings": text}],
+    from playground.read_playground), or when that can't be told (no key, no readings, Jev didn't answer). Otherwise
+    one sentence saying what kind of claim disagrees (Jev answers yes/no only, so it can't say which one). A clear no only."""
+    shown = [r for r in readings if str(r.get("readings") or "").strip()]
+    if not jev_key or not shown:
+        return None
+    text = section_text(st)
+    if not text.strip():
+        return None
+    state = {"section": {"label": st.get("label", ""), "text": js_slice(text, 0, FULL_SECTION_CHARS)},
+             "playgrounds": [{"title": str(r.get("title") or ""), "readings": js_slice(str(r["readings"]), 0, READINGS_CHARS)} for r in shown]}
+    try:
+        r = jev_ask(jev_key, state, READINGS_QUESTIONS)
+    except JevError as e:
+        log.warning("Text vs readings check (%s): Jev didn't answer: %s", st.get("label", ""), e)
+        return None
+    usage.add("jev readings check", r["model"], {"input_tokens": r["usage"].get("input_tokens", 0), "output_tokens": 0})
+    p = {k: float(r["answers"][k]["p"]) for k in READINGS_QUESTIONS if k in r["answers"]}
+    log.info("Text vs readings (%s): %s", st.get("label", ""), scores_text(p))
+    return "; ".join(READINGS_PROBLEMS[k] for k in READINGS_QUESTIONS if p.get(k, 1) <= READINGS_LOW) or None

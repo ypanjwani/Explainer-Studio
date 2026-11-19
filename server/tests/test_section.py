@@ -6,7 +6,7 @@ from types import SimpleNamespace as NS
 
 from conftest import signup
 from explainer.notes import note_fields, write_notes
-from explainer.pipeline import drops_examples, extras_hint, section_tools
+from explainer.modes.common import drops_examples, extras_hint, section_tools
 from explainer.pricing import UsageLog
 from explainer.requests import parse_generate
 from explainer.section import WEB_SEARCH_USD, parse_section, section_turn
@@ -17,13 +17,12 @@ def gen(**extra) -> dict:
 
 
 def test_parse_generate_extras():
-    assert gen(quality="quality-plus", extras=["search", "depth", "bogus"])["extras"] == ["depth", "search"]  # menu order
-    assert gen(quality="quality-plus", extras=["auto", "depth"])["extras"] == ["auto"]  # auto can't be combined
-    assert gen(quality="quality-plus", extras=[])["extras"] == []  # None: kept, unlike a missing field
-    assert "extras" not in gen(quality="quality-plus")  # not asked
-    assert "extras" not in gen(quality="quality-plus", extras="depth")
-    assert "extras" not in gen(quality="freeform-plus", extras=["depth"])  # Quality only
-    assert "extras" not in gen(quality="lite-plus", extras=["search"])
+    assert gen(quality="playground", extras=["search", "depth", "bogus"])["extras"] == ["depth", "search"]  # menu order
+    assert gen(quality="playground", extras=["auto", "depth"])["extras"] == ["auto"]  # auto can't be combined
+    assert gen(quality="playground", extras=[])["extras"] == []  # None: kept, unlike a missing field
+    assert "extras" not in gen(quality="playground")  # not asked
+    assert "extras" not in gen(quality="playground", extras="depth")
+    assert "extras" not in gen(quality="lite-plus", extras=["search"])  # Explorer only
 
 
 def test_extras_hint_and_tools():

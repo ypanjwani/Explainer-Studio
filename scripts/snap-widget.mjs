@@ -5,18 +5,30 @@
 //   play / step / run button.
 // Prints on stdout: {"frames": [{"label", "png"}], "errors": [...]} (png is base64), or {"error": "..."} when the
 // browser can't run. At most MAX_FRAMES frames.
+// stdin is the widget's HTML, or (follow-ups v5's look tool, Nov 18 2026) JSON {html, mode?: "light"|"dark", palette?,
+// maxFrames?}: the page's own colours (read from app/src/styles/tokens.css and themes.css, as the page sets them) and
+// fewer frames.
 import { readFileSync } from "node:fs";
 
-const MAX_FRAMES = 6;
-const WIDTH = 640;
+const WIDTH = 640; // the page's section column (.x-phase max-width)
 
-const html = await new Promise((resolve) => {
+const raw = await new Promise((resolve) => {
   let s = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (c) => (s += c));
   process.stdin.on("end", () => resolve(s));
 });
 const done = (o) => { console.log(JSON.stringify(o)); process.exit(0); };
+let input = { html: raw };
+if (raw.trimStart().startsWith("{")) {
+  try {
+    const o = JSON.parse(raw);
+    if (o && typeof o.html === "string") input = o;
+  } catch { /* plain html that starts with "{" */ }
+}
+const html = input.html;
+const DARK = input.mode === "dark";
+const MAX_FRAMES = Math.max(1, Math.min(6, Number(input.maxFrames) || 6));
 
 let chromium;
 try {
@@ -47,14 +59,55 @@ const THEME = {
   "--cat-3": "#c026d3", "--cat-4": "#ca8a04", "--cat-5": "#64748b", "--neg": "#2563eb", "--pos": "#ea580c",
   "--font-body": "Inter, ui-sans-serif, system-ui, sans-serif", "--font-mono": "ui-monospace, Consolas, monospace", "--radius-sm": "10px",
 };
-const vars = Object.entries(THEME).map(([k, v]) => `${k}:${v};`).join("");
+// The variables the page hands its widget frames (app/src/render/components/widget.ts THEME_VARS).
+const FRAME_VARS = new Set(Object.keys(THEME));
+
+// The page's colours for a mode and palette, layered as the page does: surface tokens (light, then dark), then the
+// explainer's palette (default, then the named one), then its dark variant. A "custom" palette is set by the app from
+// the reader's accent, so it falls back to the default palette. On any problem: THEME (light).
+function pageTheme(dark, palette) {
+  const block = (css, selector) => {
+    const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = new RegExp(`(?:^|\\n)${esc}\\s*\\{([^}]*)\\}`).exec(css);
+    const out = {};
+    for (const d of (m ? m[1] : "").matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) out[d[1]] = d[2].trim();
+    return out;
+  };
+  const tokens = read("../app/src/styles/tokens.css");
+  const themes = read("../app/src/styles/themes.css");
+  const named = palette && /^[\w-]+$/.test(palette) && palette !== "custom" ? `[data-theme="${palette}"]` : "";
+  const layers = [
+    block(tokens, ":root"),
+    dark ? block(tokens, ':root[data-mode="dark"]') : {},
+    block(themes, ".explainer"),
+    named ? block(themes, `.explainer${named}`) : {},
+    dark ? block(themes, ':root[data-mode="dark"] .explainer') : {},
+    dark && named ? block(themes, `:root[data-mode="dark"] .explainer${named}`) : {},
+  ];
+  const out = { ...THEME };
+  for (const layer of layers) for (const [k, v] of Object.entries(layer)) if (FRAME_VARS.has(k)) out[k] = v;
+  if (dark && out["--bg"] === THEME["--bg"]) throw new Error("no dark colours found");
+  return out;
+}
+
+const setupErrors = [];
+let colours = THEME;
+if (DARK || input.palette) {
+  try {
+    colours = pageTheme(DARK, String(input.palette || ""));
+  } catch (e) {
+    setupErrors.push(`page colours not read (light used): ${String(e?.message || e).slice(0, 150)}`);
+  }
+}
+const SCHEME = DARK && colours !== THEME ? "dark" : "light";
+const vars = Object.entries(colours).map(([k, v]) => `${k}:${v};`).join("");
 
 // The same document app/src/render/components/widget.ts builds for the sandboxed frame (minus the height messages).
 const doc = `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'${PLAYGROUND ? " 'unsafe-eval'" : ""}; style-src 'unsafe-inline'; img-src data: blob:">
 <style>
-:root{${vars}color-scheme:light}
-html,body{margin:0;padding:0;background:#ffffff;color:var(--text);font-family:var(--font-body),system-ui,sans-serif;font-size:15px;line-height:1.5}
+:root{${vars}color-scheme:${SCHEME}}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--font-body),system-ui,sans-serif;font-size:15px;line-height:1.5}
 body{padding:2px}
 *,*::before,*::after{box-sizing:border-box}
 input,button,select{font:inherit;color:inherit;accent-color:var(--accent)}
@@ -74,7 +127,7 @@ try {
 } catch (e) {
   done({ error: `the browser could not start: ${String(e?.message || e).slice(0, 200)}` });
 }
-const errors = [];
+const errors = [...setupErrors];
 const frames = [];
 try {
   const page = await browser.newPage({ viewport: { width: WIDTH, height: 700 } });

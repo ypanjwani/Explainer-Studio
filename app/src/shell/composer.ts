@@ -7,9 +7,9 @@ import { LIMITS, type GenEffort, type Quality } from "../../../shared/spec";
 import type { ExtractedPaper } from "../pdf";
 import { h } from "../render/dom";
 import { isDark } from "./mode";
-import { DEFAULT_MODE, MODES, modeInfo, modeName } from "./modes";
+import { DEFAULT_MODE, MODES, modeInfo } from "./modes";
 
-/** Level, How hands-on and Review rounds in Options. Hidden for v1 (only Effort, Thinking, Page colours); the code stays. */
+/** Level and How hands-on in Options. Hidden for v1 (only Effort, Thinking, Page colours); the code stays. */
 const MORE_OPTIONS = false;
 
 export interface ComposerSubmit {
@@ -19,8 +19,6 @@ export interface ComposerSubmit {
   effort: GenEffort;
   interactivity: Interactivity;
   level: LevelChoice;
-  /** Most review rounds after the page, Interactive, Creative and Lab (0 = none; "Until clean" = 10). */
-  reviewRounds: number;
   /** Code Lab 2.0, 3.0 and 4.0 only: Haiku thinks before planning each chart (off = cheaper and faster). */
   planThinking: boolean;
   /** Page colours: the explainer opens and exports in this. */
@@ -190,20 +188,9 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
   });
 
-  // "Deep" was a mode until Oct 2026; it is now Interactive with 3 review rounds.
-  try {
-    if (localStorage.getItem("quality") === "quality-deep") { localStorage.setItem("quality", "quality-plus"); localStorage.setItem("reviewRounds", "3"); }
-  } catch { /* storage blocked */ }
   const mode = dropdown<Quality>({
-    // Only Quick read and Playground are on the menu for now (Nov 2026): Interactive, Creative, Code Lab 7.0 and Playground 2.0 are hidden
-    // while they're being worked on; their code stays, and old explainers made with them still open and show their mode.
-    // Lab and Code Lab 1.0-6.0 are off the menu too. A saved choice of any hidden mode falls back to Playground.
-    // To bring a mode back, add its line here again:
-    //   ["quality-plus", "Interactive", "Sliders, charts, quizzes and worked examples, with every section checked for clarity and facts."],
-    //   ["freeform-plus", "Creative", "Every interactive part is custom-built for the topic. More playful."],
-    //   ["code-lab-7", "Code Lab 7.0 (beta)", "A deep page with interactive parts written from scratch for each section (at most 4), designed freely like Creative's, then tested and reviewed. Costs more."],
-    //   ["playground-2", "Playground 2.0 (beta)", "Like Playground, but a judge model first picks which parts each playground has (controls, charts, diagrams), then they are built, tested and reviewed."],  (hidden Nov 5 2026, maybe v2)
-    // The menu's modes and what each offers are in modes.ts.
+    // Reader and Explorer only (modes.ts). A saved choice of a mode no longer on the menu falls back to DEFAULT_MODE;
+    // old explainers made with other modes still open and show their mode's name.
     label: "Generation mode", key: "quality", fallback: DEFAULT_MODE, onChange: () => drawOptions(),
     options: MODES.map((m) => [m.id, m.name, m.description] as const),
   });
@@ -227,29 +214,7 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     options: (Object.keys(LEVEL_CHOICES) as LevelChoice[]).map((k) => [k, LEVEL_CHOICES[k].split(":")[0], k === "auto" ? "Auto: chosen from the topic" : LEVEL_CHOICES[k]] as const),
   });
 
-  // Review rounds (not Quick read): after the page, verify -> audit -> improve rounds, at most this many; they stop
-  // early once a round finds nothing to fix (server/explainer/deepen.py).
-  const rounds = segmented<"0" | "1" | "2" | "3" | "5" | "max">({
-    label: "Review rounds", key: "reviewRounds", fallback: "0", onChange: () => drawOptions(),
-    options: [
-      ["0", "Off", "No extra rounds: the page's usual clarity and fact checks only"],
-      ["1", "1", "Up to 1 review round"],
-      ["2", "2", "Up to 2 review rounds"],
-      ["3", "3", "Up to 3 review rounds"],
-      ["5", "5", "Up to 5 review rounds"],
-      ["max", "Until clean", "Keep reviewing until a round finds nothing to fix (at most 10 rounds)"],
-    ],
-  });
-  const roundsHint = h("span.cmp-opt-hint", null, "Extra checking after the page");
-  const roundsRow = h("div.cmp-opt", null,
-    h("div.cmp-opt-head", null, h("span.cmp-opt-label", null, "Review rounds"), roundsHint), rounds.el,
-    h("p.cmp-opt-note", null, "Each round checks the page and fixes what it finds, and stops early once it's clean. More rounds: slower, costs more."));
-  // Not Quick read (a short static page), nor Code Lab 1-3. Code Lab 4.0, 5.0 and 6.0 can: their interactive parts are kept through each round.
-  const noRounds = () => !modeInfo(mode.value())?.reviewRounds;
-  const roundsCount = () => (noRounds() ? 0 : rounds.value() === "max" ? 10 : Number(rounds.value()));
-
-  // Thinking (Code Lab 2.0 to 6.0): whether Haiku thinks before planning each chart or interactive part (2.0-4.0: also repairs and backups;
-  // 5.0/6.0: also building, repairing and backing up the widget code, where thinking was ~85-90% of the build cost).
+  // Thinking (Explorer): whether Haiku thinks before planning and building each playground.
   // Measured Oct 2026: off cost ~40% less and was ~25% faster, with a few more charts rejected by the reviewer.
   const thinking = segmented<"off" | "on">({
     label: "Thinking", key: "planThinking", fallback: "off", onChange: () => drawOptions(),
@@ -273,11 +238,10 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     ],
   });
 
-  // v1 (Nov 2026): only Effort, Thinking and Page colours are shown. Level, How hands-on and Review rounds are hidden and
-  // send their defaults (Auto, Balanced, Off; not a remembered choice the reader can no longer see); set MORE_OPTIONS to bring them back.
+  // v1 (Nov 2026): only Effort, Thinking and Page colours are shown. Level and How hands-on are hidden and send their
+  // defaults (Auto, Balanced; not a remembered choice the reader can no longer see); set MORE_OPTIONS to bring them back.
   const levelValue = () => (MORE_OPTIONS ? level.value() : "auto");
   const handsValue = () => (MORE_OPTIONS ? hands.value() : "balanced");
-  const roundsValue = () => (MORE_OPTIONS ? roundsCount() : 0);
 
   // The options live in a small popover behind "Options"; a dot shows when any is changed.
   const optRow = (label: string, hint: string, el: HTMLElement) => h("div.cmp-opt", null, h("div.cmp-opt-head", null, h("span.cmp-opt-label", null, label), h("span.cmp-opt-hint", null, hint)), el);
@@ -285,18 +249,15 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
     ...(MORE_OPTIONS ? [optRow("Level", "Who the page is written for", level.el), optRow("How hands-on", "Reading vs. things to play with", hands.el)] : []),
     optRow("Effort", "More thinking: slower, fewer slips", effort.el),
     thinkingRow,
-    ...(MORE_OPTIONS ? [roundsRow] : []),
     optRow("Page colours", "Kept when you export", colors.el));
   const optBtn = h("button.cmp-opts-btn", { type: "button", "aria-expanded": "false", "aria-haspopup": "dialog", title: "Effort, thinking, page colours" },
     h("span", { "aria-hidden": "true", html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>' }),
     h("span", null, "Options"), h("span.cmp-opts-dot", { "aria-hidden": "true" }));
   function drawOptions() {
-    optBtn.classList.toggle("is-changed", levelValue() !== "auto" || handsValue() !== "balanced" || effort.value() !== "medium" || roundsValue() > 0
+    optBtn.classList.toggle("is-changed", levelValue() !== "auto" || handsValue() !== "balanced" || effort.value() !== "medium"
       || (isChartLab() && thinking.value() === "on"));
     thinkingRow.classList.toggle("is-off", !isChartLab());
     thinkingHint.textContent = isChartLab() ? "Think before planning and building interactive parts" : "Only for Explorer";
-    roundsRow.classList.toggle("is-off", noRounds());
-    roundsHint.textContent = noRounds() ? `Not for ${modeName(mode.value()) ?? "this mode"}` : "Extra checking after the page";
   }
   const outside = (e: Event) => { if (!pop.contains(e.target as Node) && !optBtn.contains(e.target as Node)) setPop(false); };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setPop(false); optBtn.focus(); } };
@@ -314,7 +275,7 @@ export function createComposer(opts: { placeholder: string; autofocus?: boolean;
   optBtn.addEventListener("click", () => setPop(optBtn.getAttribute("aria-expanded") !== "true"));
   drawOptions();
 
-  const choices = (): ComposerChoices => ({ quality: mode.value(), effort: effort.value(), interactivity: handsValue(), level: levelValue(), reviewRounds: roundsValue(),
+  const choices = (): ComposerChoices => ({ quality: mode.value(), effort: effort.value(), interactivity: handsValue(), level: levelValue(),
     planThinking: isChartLab() && thinking.value() === "on", colorMode: colors.value() });
 
   const form = h("form.composer", { novalidate: true }, chips, textarea, h("div.cmp-row", null, attach, mode.el, h("div.cmp-opts", null, optBtn, pop), send), file);

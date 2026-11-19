@@ -634,7 +634,7 @@ export interface ExplainerSpec {
   /** Quality+ "Add to each section": a deeper explanation and/or the same explanation in other words, per stage id, written with the page and opened from the section's buttons. Absent = none. */
   sectionNotes?: Record<string, SectionNotes>;
   /** A Quality+ revision made as changes (server/explainer/revise.py): stages added, rewritten, removed and kept as they were. Absent = written whole. */
-  revision?: { added: number; replaced: number; removed: number; kept: number; charts?: number; moved?: number; steps?: StepReport[] };
+  revision?: { added: number; replaced: number; removed: number; kept: number; charts?: number; moved?: number; steps?: StepReport[]; reply?: string; suggestions?: string[] };
   /** Smart mode (server/explainer/smart.py): sections written as quick, interactive and creative, custom widgets built, and how many sections Jev judged (the rest fell back to Interactive). Absent = not Smart. */
   smart?: { quick: number; interactive: number; creative: number; custom: number; byJev: number };
   /** "Go deeper" on formula blocks (POST /api/formula): explanations written when a reader first clicks, saved here so
@@ -650,37 +650,15 @@ export interface ExplainerSpec {
 export interface PaperSection { heading: string; text: string }
 
 /**
- * Haiku always plans. quality-plus ("Quality+", default): the planner writes and chooses everything,
- * then Haiku picks the design; a clarity check (Jev judges every stage for ideas used before they are
- * explained or too hard for the level, Haiku adds or simplifies what it flags) runs before the fact check.
- * freeform-plus ("Freeform+"): the planner writes briefs for interactive
- * parts and Haiku writes each one as its own HTML/JS widget (sandboxed). lite-plus ("Lite+"): a static
- * quality-plus page: the same visuals drawn at fixed values, with no controls, quizzes, questions, worked
- * examples, click-to-use widgets or Ask chatbot (LITE_DROPPED; the spec gets noAsk and noControls).
- * Older records may carry retired modes (quality, quality-fixed, custom, lab, cheap, economy, compact-plus,
- * quality-2 (Quality 2.0, merged into quality-plus in Oct 2026), freeform); the server maps them to
- * quality-plus or freeform-plus.
- * smart (server/explainer/smart.py): Haiku lists the sections, Jev picks each one's writing style (quick | interactive |
- * creative) and visual (none | built-in | custom widget), and the Quality+ planner writes the page to match; widgets
- * are written only where Jev picked them. No review rounds; a revision of a Smart page runs as quality-plus.
- * quality-deep (the composer's "Review rounds", shown as Interactive; server/explainer/deepen.py): a quality-plus page, then up to
- * reviewRounds (default 3) rounds of
- * verify (code, Jev and Haiku checks per section) -> audit (Haiku decides what is real and what to do) -> improve
- * (a revision applying only the audit). Only the final page is shown.
+ * The modes. Only two run (server/explainer/modes/): lite-plus (Reader: a short static page, charts at fixed values, no
+ * controls, quizzes or Ask chatbot; LITE_DROPPED, noAsk, noControls) and playground (Explorer: up to 4 marked sections
+ * get a playground spec, shared/playground, dry-run by scripts/check-playground.mjs, repaired and reviewed by Jev).
+ * The other names belong to retired modes: old saved pages still carry them (and open, showing the mode's name from
+ * app/src/shell/modes.ts LEGACY_MODE_NAMES), but the server refuses to run them.
  */
-/** scene-plus ("Lab", beta): an Interactive page, then a second pass designs each section's interaction as a scene (server/explainer/scenes.py). */
-/** code-lab ("Code Lab", beta): Haiku writes the prose, then designs and writes each section's interactive code from scratch; every widget is checked by running it (server/explainer/codelab.py).
- * code-lab-2 ("Code Lab 2.0", beta): the same, with the page's one Effort for every Haiku step, and chart-like sections drawn as Vega-Lite charts.
- * code-lab-3 ("Code Lab 3.0", beta): Code Lab 2.0 with a chart-only plan (fewer fields; controls read from the chart), so it costs less.
- * code-lab-4 ("Code Lab 4.0", beta): Code Lab 3.0, but the page writer picks the few sections that get a chart and Jev checks the page for repeats.
- * code-lab-5 ("Code Lab 5.0", beta): Code Lab 4.0's writer picks and repeat check, but each picked section's interactive part is Haiku's own code (no Vega), at the page's Effort.
- * code-lab-6 ("Code Lab 6.0", beta): a deeper page; the writer picks the sections and Haiku plans and builds each interactive part, with no widget test run, repairs or Jev review (only free static checks). Jev still fact-checks and clarity-checks the text.
- * code-lab-7 ("Code Lab 7.0", beta): Code Lab 5.0 with Creative's freedom for the builder: the plan fixes what each interactive part shows, Haiku designs how it looks (kit optional, ~300 lines); same checks, repairs and review.
- * playground ("Playground", beta): Code Lab 5.0's writer marks and Jev checks, but each marked section gets a playground spec (shared/playground, from the ai-playground experiment: fixed components plus short snippets, with dragging, clicking and play), dry-run by scripts/check-playground.mjs and repaired from its errors.
- * playground-2 ("Playground 2.0", beta): Playground, but Jev picks each playground's parts (controls, charts, marks, diagram structures) and Haiku fills them in (server/explainer/pgpick.py). */
 export type Quality = "quality-plus" | "quality-deep" | "freeform-plus" | "lite-plus" | "smart" | "scene-plus" | "code-lab" | "code-lab-2" | "code-lab-3" | "code-lab-4" | "code-lab-5" | "code-lab-6" | "code-lab-7" | "playground" | "playground-2";
 
-/** Quality, Quality 2.0 and Lab share the page, the extras question and the Add section button. */
+/** Modes that may ask "What do you want to add to each section?" (hidden in v1, EXTRAS_QUESTION in app.ts). */
 export const isQuality = (q: Quality | undefined) => q === undefined || q === "quality-plus" || q === "quality-deep" || q === "scene-plus" || q === "code-lab" || q === "code-lab-2" || q === "code-lab-3" || q === "code-lab-4" || q === "code-lab-5" || q === "code-lab-6" || q === "code-lab-7" || q === "playground" || q === "playground-2";
 
 /**
@@ -692,12 +670,6 @@ export const LITE_DROPPED = new Set<string>(["quiz", "reveal", "predict", "examp
 /** Control blocks: the planner is told to write none in Lite+, and a noControls page doesn't render them. */
 export const CONTROL_TYPES = new Set<string>(["slider", "choice", "toggle", "presets"]);
 
-/** Modes where Jev first skips side-material sections of a PDF (server/explainer/filter.py). */
-export const filtersSections = (q: Quality | undefined) => q === "quality-plus" || q === "quality-deep" || q === "freeform-plus" || q === "lite-plus" || q === "smart" || q === "scene-plus" || q === "code-lab" || q === "code-lab-2" || q === "code-lab-3" || q === "code-lab-4" || q === "code-lab-5" || q === "code-lab-6" || q === "code-lab-7" || q === "playground" || q === "playground-2";
-
-/** Modes where Jev answers the page brief (level, length, approach, look...) before the plan (server/explainer/brief.py). */
-export const usesBrief = (q: Quality | undefined) => q === "quality-plus" || q === "quality-deep" || q === "lite-plus" || q === "smart" || q === "scene-plus" || q === "code-lab" || q === "code-lab-2" || q === "code-lab-3" || q === "code-lab-4" || q === "code-lab-5" || q === "code-lab-6" || q === "code-lab-7" || q === "playground" || q === "playground-2";
-
 /** Thinking effort for planning and widget writing (composer toggle). High raises planning only; widgets are written at medium. */
 export type GenEffort = "low" | "medium" | "high";
 
@@ -707,16 +679,18 @@ export interface DesignPrefs { palette: ThemeName | "custom"; accent?: string; c
 /**
  * Fields every request may carry. interactivity: the composer's Mostly reading | Balanced | Hands-on toggle (absent = balanced).
  * level: the composer's Level toggle (absent or "auto" = Jev picks it in the brief modes).
- * extras: the answer to "What do you want to add to each section?" (Quality+ only). Absent = not asked (the planner's
+ * extras: the answer to "What do you want to add to each section?" (Explorer only). Absent = not asked (the planner's
  * usual worked examples); empty = None (no worked examples).
- * reviewRounds: the most review rounds after the page, not on lite-plus (1-10; the composer's "Until clean" sends 10;
- * absent = none, except quality-deep, which then has 3). Interactive with rounds is sent as quality-deep.
- * planThinking: Code Lab 2.0, 3.0 and 4.0 only; false plans, repairs and backs up its charts with Haiku's thinking off (absent = on).
+ * planThinking: Explorer only; false plans and builds its playgrounds with Haiku's thinking off (absent = on).
  * colorMode: the composer's Page colours; stamped as spec.design.mode, so the page opens and exports in it (absent = follow the reader).
  * avoid: no longer sent (Nov 4 2026: "↻ Retry" now runs from scratch). Kept so requests saved by the old Retry still parse:
- * the replaced explainer's section titles and theme (server/explainer/pipeline.py avoid_hint, other_theme; at most 12 titles).
+ * the replaced explainer's section titles and theme (server/explainer/modes/common.py avoid_hint, other_theme; at most 12 titles).
  */
-interface RequestOptions { quality?: Quality; effort?: GenEffort; interactivity?: Interactivity; level?: LevelChoice; extras?: Extra[]; reviewRounds?: number; planThinking?: boolean; colorMode?: Exclude<ColorMode, "auto">; avoid?: { titles: string[]; theme?: ThemeName }; followUp?: FollowUp }
+interface RequestOptions { quality?: Quality; effort?: GenEffort; interactivity?: Interactivity; level?: LevelChoice; extras?: Extra[]; planThinking?: boolean; colorMode?: Exclude<ColorMode, "auto">; avoid?: { titles: string[]; theme?: ThemeName }; followUp?: FollowUp;
+  /** First message (FIRST_TALK): the conversation so far when it has no page yet (each earlier prompt with what it did). */
+  history?: string[];
+  /** First message: build without the first-message step (the reader chose to build: an offer, a new-topic button, a Retry of a page). */
+  direct?: boolean }
 
 /**
  * A follow-up typed under an explainer in the same conversation (shared/followup.ts builds it).
@@ -728,39 +702,18 @@ interface RequestOptions { quality?: Quality; effort?: GenEffort; interactivity?
  * reuses them for the stages it keeps instead of writing them again.
  * widgets: the previous version's widget blocks by stage id, in page order. The outline only holds a placeholder
  * for each ("(interactive widget: <title>)"), and the server puts the widget back where its placeholder survives.
- * add: "Add section" (Quality+): only add new stages, placed by Jev; nothing on the page changes (server/explainer/addsection.py).
+ * plan: what a typed revise follow-up asks (POST /api/followup/plan); the server runs a revise follow-up only with one.
  */
-/** One part of the page a revision changes (server/explainer/targets.py): a section's widget, its text, the whole section, or a new section after `after`. */
-export interface FollowUpTarget { part: "widget" | "text" | "section" | "new-section"; stage: string; after: string; what: string }
-/** Feedback v2 (server/explainer/feedback.py): the change the reader confirmed. Only these parts change; pageWide = the whole page. */
-export interface FeedbackRun { id: string; targets: FollowUpTarget[]; keep: string[]; pageWide: boolean }
-/** A part a picked follow-up changes; "remove" drops a section (server/explainer/followup_pick.py). */
-export interface PickTarget { part: FollowUpTarget["part"] | "remove"; stage: string; after: string; what: string }
-/** The parts a typed follow-up on a Playground or Quick read page changes (POST /api/followup/pick, or the reader's answer to its question). pageWide: every section, and the title, key intuition and level may change too. */
-export interface FollowUpPick { targets: PickTarget[]; pageWide: boolean }
-
 export type FollowUp =
-  | { kind: "revise"; outline: string; design: Design; accent?: string; colorMode?: ColorMode; source?: string; kept?: KeptParts; widgets?: Record<string, Extract<Block, { type: "widget" }>[]>; add?: true; feedback?: FeedbackRun; pick?: FollowUpPick; plan?: FollowUpPlan }
+  | { kind: "revise"; outline: string; design: Design; accent?: string; colorMode?: ColorMode; source?: string; kept?: KeptParts; widgets?: Record<string, Extract<Block, { type: "widget" }>[]>; plan?: FollowUpPlan }
   | { kind: "new"; previous: string; source?: string };
 
-/** POST /api/route: does a follow-up change the explainer above, or ask for a new one? */
-export interface RouteRequest { text: string; title: string; stages: string[] }
-export interface RouteResponse { kind: "revise" | "new" | "unclear"; usd: number }
-
-/** Modes whose typed follow-ups are matched to sections first (POST /api/followup/pick); keep equal to followup_pick.MODES. */
-export const PICK_MODES: readonly Quality[] = ["playground", "lite-plus"];
-/** POST /api/followup/pick. followUp: the page as a revise follow-up. */
-export interface PickRequest { text: string; quality: Quality; followUp: Extract<FollowUp, { kind: "revise" }> }
-/** One reading of an unclear request; choosing it runs these parts. */
-export interface PickOption { label: string; targets: PickTarget[]; pageWide: boolean }
-export type PickResponse =
-  | ({ by: "jev" | "jev+haiku" | "haiku"; usd: number } & FollowUpPick)
-  | { question: { text: string; options: PickOption[] }; by: "jev+haiku" | "haiku"; usd: number }
-  | { error: string; usd: number };
+/** Modes whose typed revise follow-ups go through POST /api/followup/plan first (modes/followup/run.QUALITIES). */
+export const PLAN_MODES: readonly Quality[] = ["playground", "lite-plus"];
 
 /**
- * Follow-ups v3 (server/explainer/understand.py, steps.py, section_editor.py; FOLLOWUP_PLAN=1): a typed follow-up on a
- * Playground or Quick read page as the sections it is about (each with the reader's intent; a section editor decides what
+ * Follow-ups v3 (server/explainer/modes/followup/: understand.py, steps.py, section_editor.py): a typed follow-up on a
+ * Reader or Explorer page as the sections it is about (each with the reader's intent; a section editor decides what
  * to change there) plus typed changes to the page's structure. Keep PLAN_OPS equal to understand.OPS.
  */
 export const PLAN_OPS = [
@@ -775,32 +728,58 @@ export interface PlanStep { op: PlanOp; section: string; other: string; after: s
 /** What the reader wants in one section, in their terms (never "edit the text/playground": the section editor decides).
  * derived: added by the app as a knock-on fix (a mention of a removed section, a playground for a new level), with `because`. */
 export interface SectionIntent { section: string; intent: string; quote: string; derived?: true; because?: string; unsure?: string }
-/** FollowUp.plan: what the reader's follow-up became (and confirmed, when the plan card asked). */
-export interface FollowUpPlan { sections: SectionIntent[]; steps: PlanStep[] }
+/** FollowUp.plan: what the reader's follow-up became (and confirmed, when the plan card asked).
+ * v4: follow-ups v4 (FOLLOWUP_V4=1, server/explainer/modes/followup/v4/): the reader's request restated as one brief for
+ * the tool-using editor; sections and steps are then [] (the editor decides what to touch). */
+/** v5 (FOLLOWUP_V5=1): the one agent (agent, with the conversation, the option the reader chose and words they added, and the
+ * answer they got just before; intent: Jev's call on whether the message asks for a change). brief/base/refs: plans made
+ * before the agent (older records). */
+export interface FollowUpPlanV5 { agent?: true; intent?: "answer" | "change"; conversation?: string; chose?: string; extra?: string; earlier?: string; brief?: string; base?: number; refs?: number[] }
+export interface FollowUpPlan { sections: SectionIntent[]; steps: PlanStep[]; v4?: { brief: string; earlier?: string }; v5?: FollowUpPlanV5 }
 export interface PlanOption { label: string; sections: SectionIntent[]; steps: PlanStep[] }
 /** POST /api/followup/plan. option + extra: the reader picked an option of an earlier question (and added words to it).
  * history: the conversation's earlier prompts, each with what it did, oldest first. */
-export interface PlanRequest { text: string; quality: Quality; followUp: Extract<FollowUp, { kind: "revise" }>; option?: PlanOption; extra?: string; history?: string[] }
+/** baseId: the record the follow-up is under (follow-ups v5 find its version in the server's version store). */
+export interface PlanRequest { text: string; quality: Quality; followUp: Extract<FollowUp, { kind: "revise" }>; option?: PlanOption; extra?: string; history?: string[]; baseId?: string }
 export type PlanResponse =
-  | { kind: "change"; sections: SectionIntent[]; steps: PlanStep[]; summary: string[]; confirm: boolean; fixes?: string[]; usd: number }
+  | { kind: "change"; sections: SectionIntent[]; steps: PlanStep[]; summary: string[]; confirm: boolean; fixes?: string[]; v4?: { brief: string; earlier?: string }; v5?: FollowUpPlanV5; usd: number }
   | { kind: "ask"; question: { text: string; options: PlanOption[] }; usd: number }
-  | { kind: "cannot"; reason: string; alternative: PlanOption | null; usd: number }
+  | { kind: "cannot"; reason: string; alternative: PlanOption | null; newTopic?: boolean; usd: number }
   | { kind: "answer"; answer: string; usd: number }
-  | { kind: "revert"; usd: number }
-  | { kind: "off"; usd: number }
+  | { kind: "revert"; to?: number; usd: number } // to: the version to go back to (v5; default: the one before)
   | { error: string; usd: number };
 /** How one part of a plan ended (spec.revision.steps): done; kept (the editor checked it and found nothing to change);
  * undone (changed, failed its check, put back); skipped. */
-export interface StepReport { label: string; status: "done" | "kept" | "undone" | "skipped"; why?: string; derived?: true }
+export interface StepReport { label: string; status: "done" | "kept" | "undone" | "skipped"; why?: string; derived?: true; section?: string }
 /** A follow-up whose sections the editor checked and found right: the build ends with this prefix on its message, and the
  * app shows it as a reply, not an error (no new version, not counted). Keep equal to steps.CHECKED. */
 export const CHECKED_PREFIX = "✓ ";
+/** Follow-ups v4: the editor stopped to ask the reader before changing anything. The build ends with this prefix and a JSON
+ * {text, question: {text, options}} on its message; the app shows the question (status picking, plan kind ask), no new
+ * version, not counted. Keep equal to v4.editor.ASKED. */
+export const ASKED_PREFIX = "? ";
+/** Follow-ups v5: the agent found the message is about a different topic. The build ends with this prefix and the reply on its
+ * message; the app shows it with a "New explainer about this" button (status picking, plan kind cannot + newTopic), no new
+ * version, not counted. Keep equal to followup.shared.NEW_TOPIC and history.NEW_TOPIC. */
+export const NEW_TOPIC_PREFIX = "↗ ";
+/** Follow-ups v5: an answer (the message only asked) that lists fixes the agent would make. Shown like a CHECKED_PREFIX
+ * answer plus a "Yes, make these fixes" button, which sends the next message as a picked option (always a change). Keep
+ * equal to followup.shared.OFFER and history.OFFER. Doesn't start with CHECKED_PREFIX ("✓+" vs "✓ "). */
+export const OFFER_PREFIX = "✓+ ";
+/** First message (FIRST_TALK, server/explainer/modes/intake.py): the message didn't ask for a page, so the build ends with
+ * this prefix and a JSON {reply, offer?} on its message; the app shows the reply in the thread (status done, no spec, not
+ * counted), with a "Make an explainer about this" button when offer (a brief) is set. Keep equal to modes/topic.ANSWER.
+ * Doesn't start with CHECKED_PREFIX ("✓*" vs "✓ "). */
+export const ANSWER_PREFIX = "✓* ";
+/** A new topic with a brief (follow-ups v5's new_topic): this prefix and a JSON {reply, brief}; shown like NEW_TOPIC_PREFIX,
+ * and its button builds from the brief. Keep equal to modes/topic.NEW_TOPIC_BRIEF. Doesn't start with NEW_TOPIC_PREFIX. */
+export const NEW_TOPIC_BRIEF_PREFIX = "↗+ ";
 
 export type GenerateRequest =
   | ({ mode: "concept"; text: string } & RequestOptions)
   | ({ mode: "paper"; title: string; note: string; sections: PaperSection[] } & RequestOptions);
 
-export type ProgressStep = "read" | "summarize" | "plan" | "components" | "interaction" | "design" | "build" | "examples" | "notes" | "clarity" | "check" | "improve";
+export type ProgressStep = "intake" | "read" | "summarize" | "plan" | "components" | "interaction" | "design" | "build" | "examples" | "notes" | "clarity" | "check" | "improve";
 
 /** Token usage of one Claude call, priced by server/explainer/pricing.py. */
 export interface UsageStep {
@@ -815,23 +794,13 @@ export interface UsageStep {
 /** quality is a string: old records hold retired mode names, shown by their label. */
 export interface Usage { quality: string; effort?: GenEffort; steps: UsageStep[]; totalUsd: number; seconds: number }
 
-export type GenerateEvent =
-  | { type: "step"; step: ProgressStep; status: "running" | "done"; detail?: string }
-  | { type: "done"; spec: ExplainerSpec; usage?: Usage }
-  | { type: "error"; message: string };
+/** What the app's locked card can show while a page builds: title/subtitle after the plan, theme/icons after the design. */
+export interface StepPreview { title?: string; subtitle?: string; theme?: string; accent?: string; icons?: string[] }
 
-/**
- * Edit chat (POST /api/edit): one Haiku turn. Haiku only chooses tools; the
- * browser runs them (shared/edit.ts) and sends the results back in the next
- * request, so the server stays stateless. `context` describes the selected part.
- */
-export type EditContent =
-  | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
-export interface EditMessage { role: "user" | "assistant"; content: string | EditContent[] }
-export interface EditRequest { context: string; messages: EditMessage[] }
-export interface EditResponse { content: EditContent[]; usd: number }
+export type GenerateEvent =
+  | { type: "step"; step: ProgressStep; status: "running" | "done"; detail?: string; preview?: StepPreview }
+  | { type: "done"; spec: ExplainerSpec; usage?: Usage; version?: number; madeFrom?: number } // version: the number the server gave it (versions.py); madeFrom: v5, made from an older version
+  | { type: "error"; message: string };
 
 /**
  * A section tool (POST /api/section), run when the reader clicks its button: one Haiku call that searches the web
@@ -884,9 +853,6 @@ export const LIMITS = {
   sections: 80,
   chatMessages: 20,
   chatChars: 40_000,
-  /** Edit chat: largest request (context + conversation, characters). */
-  editChars: 60_000,
-  editMessages: 40,
   /** Follow-ups: the previous explainer's outline, summary and source excerpt together (characters). */
   followUpChars: 90_000,
   /** Revisions: the previous version's written worked-example steps and section extras, kept for unchanged stages (characters). */

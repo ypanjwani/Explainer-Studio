@@ -2,11 +2,9 @@
 // the local dev server and report which tools each one used and what it cost.
 // Makes real API calls (costs money). Needs `npm run dev` running.
 //
-//   node scripts/variety.mjs                       all topics, Quality+ mode (prints the clarity and fact-check stats)
-//   node scripts/variety.mjs --mode freeform-plus 2 5   topics #2 and #5 (1-based), Freeform+ mode
-//   node scripts/variety.mjs --mode quality-deep --effort low   Quality 2.0 at Low effort (default: the server's PLAN_EFFORT)
-//   node scripts/variety.mjs --mode code-lab-2 --effort low --no-think 1 4   Code Lab 2.0 with chart planning thinking off
-//   node scripts/variety.mjs --mode playground --effort low 1   Playground mode on topic #1
+//   node scripts/variety.mjs                       all topics, Explorer (playground)
+//   node scripts/variety.mjs --mode lite-plus 2 5  topics #2 and #5 (1-based), Reader
+//   node scripts/variety.mjs --effort low --no-think 1 4   Explorer at Low effort with Thinking off (default: the server's PLAN_EFFORT)
 //
 // Specs are saved to .variety/<mode>-<n>.json (<mode>-<effort>-<n>.json with --effort, plus -nothink with --no-think)
 // for inspection.
@@ -48,11 +46,9 @@ async function generate(text, quality, effort) {
   const res = await fetch(`${API}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Origin: "http://localhost:5173", Authorization: `Bearer ${token}` },
-    // Quality 2.0: ask for every version and audit too (debugVersions; the app never sends it).
     body: JSON.stringify({ mode: "concept", text, quality, ...(effort ? { effort } : {}), ...(noThink ? { planThinking: false } : {}),
-      ...(quality === "quality-deep" ? { debugVersions: true } : {}),
-      // Code Lab: also the widgets Jev's review rejected (debugRejected; the app never sends it).
-      ...(quality.startsWith("code-lab") || quality.startsWith("playground") ? { debugRejected: true } : {}) }),
+      // Explorer: also the playgrounds Jev's review rejected (debugRejected; the app never sends it).
+      ...(quality === "playground" ? { debugRejected: true } : {}) }),
   });
   if (res.status === 401) { token = undefined; return generate(text, quality, effort); }
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -63,12 +59,12 @@ async function generate(text, quality, effort) {
   const done = events.find((e) => e.type === "done");
   if (!done) throw new Error("stream ended without a spec");
   const checks = events.filter((e) => e.type === "step" && /Checking numbers/.test(e.detail ?? "")).length;
-  return { spec: done.spec, usage: done.usage, checks, versions: done.versions, rejected: done.rejected, labMarks: done.labMarks, labMath: done.labMath, labBlueprint: done.labBlueprint };
+  return { spec: done.spec, usage: done.usage, checks, rejected: done.rejected, labMarks: done.labMarks, labLook: done.labLook };
 }
 
 const args = process.argv.slice(2);
 const mi = args.indexOf("--mode");
-const quality = mi >= 0 ? args.splice(mi, 2)[1] : "quality-plus";
+const quality = mi >= 0 ? args.splice(mi, 2)[1] : "playground";
 const ei = args.indexOf("--effort");
 const effort = ei >= 0 ? args.splice(ei, 2)[1] : undefined;
 const ti = args.indexOf("--no-think");
@@ -82,12 +78,9 @@ let total = 0;
 for (const [n, topic] of list) {
   process.stdout.write(`\n#${n} [${name}] ${topic}\n`);
   try {
-    const { spec, usage, checks, versions, rejected, labMarks, labMath, labBlueprint } = await generate(topic, quality, effort);
-    writeFileSync(`.variety/${name}-${n}.json`, JSON.stringify({ spec, usage, ...(rejected ? { rejected } : {}), ...(labMarks ? { labMarks } : {}), ...(labMath ? { labMath } : {}), ...(labBlueprint ? { labBlueprint } : {}) }, null, 1));
-    if (labMath?.length) console.log(`  maths review: ${labMath.map((m) => `${m.section} ${m.outcome}${m.failed?.length ? ` (${m.failed.join(", ")})` : ""}${m.soft?.length ? ` soft: ${m.soft.join(", ")}` : ""}`).join("; ")}`);
+    const { spec, usage, checks, rejected, labMarks, labLook } = await generate(topic, quality, effort);
+    writeFileSync(`.variety/${name}-${n}.json`, JSON.stringify({ spec, usage, ...(rejected ? { rejected } : {}), ...(labMarks ? { labMarks } : {}), ...(labLook ? { labLook } : {}) }, null, 1));
     if (rejected?.length) console.log(`  rejected by the review (saved in the file): ${rejected.map((r) => `${r.section} [${r.kind}] "${r.title}"`).join("; ")}`);
-    // Quality 2.0: each version with the findings and audit that led to it, as .variety/<name>-<n>-v<k>.json.
-    (versions ?? []).forEach((v, k) => writeFileSync(`.variety/${name}-${n}-v${k + 1}.json`, JSON.stringify(v, null, 1)));
     const blocks = spec.stages.flatMap((s) => s.blocks);
     const types = blocks.map((b) => b.type);
     const hist = Object.entries(types.reduce((m, t) => ((m[t] = (m[t] ?? 0) + 1), m), {})).sort((a, b) => b[1] - a[1]);
@@ -118,12 +111,6 @@ for (const [n, topic] of list) {
     const sample = blocks.find((b, i) => b.type === "text" && i > 0) ?? blocks.find((b) => b.type === "text");
     if (sample) console.log(`  sample text: ${sample.md.replace(/\s+/g, " ").slice(0, 320)}${sample.md.length > 320 ? "…" : ""}`);
     if (spec.clarity) console.log(`  clarity: ${spec.clarity.flagged}/${spec.clarity.stages} stages flagged · ${spec.clarity.added} added · ${spec.clarity.edited} edited · ${spec.clarity.remaining} still flagged`);
-    for (const v of (versions ?? []).filter((x) => x.findings)) {
-      const byCheck = Object.entries(v.findings.reduce((m, f) => ((m[f.check] = (m[f.check] ?? 0) + 1), m), {})).map(([k, c]) => `${k}×${c}`).join(" ");
-      const real = (v.audit ?? []).filter((i) => i.verdict === "real");
-      console.log(`  ${v.label}: ${v.findings.length} findings (${byCheck || "none"}) · audit: ${real.length} real, ${(v.audit ?? []).length - real.length} false alarms · ${v.spec?.stages.length ?? "?"} stages after`);
-      for (const i of real) console.log(`    [${i.action}] ${i.stage || "(new)"}: ${i.instruction.slice(0, 160)}`);
-    }
     if (spec.factCheck) console.log(`  fact check: ${spec.factCheck.checked} checked · ${spec.factCheck.flagged} flagged · ${spec.factCheck.fixed} fixed`);
     console.log(`  warnings (${spec.warnings.length}): ${spec.warnings.join(" | ") || "none"}`);
   } catch (e) {

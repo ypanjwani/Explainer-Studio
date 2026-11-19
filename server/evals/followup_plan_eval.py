@@ -34,7 +34,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from explainer.modes.followup import page_index as pidx
-from explainer.modes.followup import understand as U
+from explainer.modes.followup.v3 import understand as U
 from explainer.pricing import UsageLog
 
 from .followup_pick_eval import CASES, VARIETY, load_page, read_labels

@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import json
 
-from explainer.modes.followup import playground_edit as ce, section_editor as se
+from explainer.modes.followup import playground_edit as ce
+from explainer.modes.followup.v3 import section_editor as se
 from explainer.pricing import UsageLog
 from followup_v3_data import OLD, PAGE, PG, edited, editor_reply, index_of, intent, playground, stage_of
 

@@ -5,9 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from . import data
-from .deepen import ROUNDS_CEILING
 from .followup import parse_follow_up
 from .js import js_len, js_slice, js_string, js_trim
+from .modes.followup.shared import HISTORY_CHARS, MAX_HISTORY
+
+# The two modes the server runs (modes/). Any other quality (an old mode's page, an old app tab, a script) is kept as
+# sent, so /api/generate can refuse it with a clear message (400 mode_off).
+QUALITIES = ("lite-plus", "playground")
 
 
 def _get(body: Any, key: str) -> Any:
@@ -17,11 +21,9 @@ def _get(body: Any, key: str) -> Any:
 def parse_generate(body: Any) -> dict | str:
     """A GenerateRequest, or the error to show."""
     limits = data.limits()
-    # Quality+, Quality 2.0 (quality-deep, deepen.py), Lite+ and Freeform+ are offered. Retired modes in old records (quality, quality-fixed, custom,
-    # lab, cheap, economy, compact-plus, and quality-2, merged into Quality+) run as Quality+, and plain
-    # freeform as Freeform+.
+    # Reader (lite-plus) and Explorer (playground). Anything else stays as sent (cut short) for the refusal.
     q = _get(body, "quality")
-    quality = "freeform-plus" if q in ("freeform", "freeform-plus") else q if q in ("lite-plus", "quality-deep", "smart", "scene-plus", "code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground", "playground-2") else "quality-plus"
+    quality = q if q in QUALITIES else js_slice(q, 0, 40) if isinstance(q, str) and q else "none"
     opts: dict = {}
     effort = _get(body, "effort")
     if effort in ("low", "medium", "high"):  # absent = server default (PLAN_EFFORT or medium)
@@ -32,37 +34,36 @@ def parse_generate(body: Any) -> dict | str:
     level = _get(body, "level")
     if isinstance(level, str) and level != "auto" and level in data.menu("LEVEL_CHOICES"):  # absent/"auto" = Jev or the planner picks it
         opts["level"] = level
-    # "What do you want to add to each section?" (Quality+ only): known keys, in menu order; "auto" can't be combined
+    # "What do you want to add to each section?" (Explorer only): known keys, in menu order; "auto" can't be combined
     # with the others. An empty list is kept: it means None (no worked examples), unlike a missing field (not asked).
     extras = _get(body, "extras")
-    if quality in ("quality-plus", "quality-deep", "scene-plus", "code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground", "playground-2") and isinstance(extras, list):
+    if quality == "playground" and isinstance(extras, list):
         picked = [k for k in data.menu("EXTRAS") if k in extras]
         opts["extras"] = ["auto"] if "auto" in picked else picked
-    # Review rounds (the composer's Options): the most verify -> audit -> improve rounds (deepen.py). Absent or invalid =
-    # deepen.MAX_ROUNDS.
-    rounds = _get(body, "reviewRounds")
-    # Not Lite+ (Quick read stays a short static page), Smart (its picks would be undone by Quality+ improves) or Code Lab
-    # 1-3. Code Lab 7.0 and Playground can: an improve keeps their interactive parts as placeholders and puts them back (deepen.restore_widgets).
-    if quality not in ("lite-plus", "smart", "code-lab", "code-lab-2", "code-lab-3") and isinstance(rounds, int) and not isinstance(rounds, bool) and 1 <= rounds <= ROUNDS_CEILING:
-        opts["reviewRounds"] = rounds
-    # Code Lab 2.0, 3.0, 7.0 and Playground only: plan (and, in 2.0-3.0, repair and back up) charts with Haiku's thinking on (True) or off (False). Absent = on.
+    # Explorer only: plan and build playgrounds with Haiku's thinking on (True) or off (False). Absent = on.
     think = _get(body, "planThinking")
-    if quality in ("code-lab-2", "code-lab-3", "code-lab-7", "playground", "playground-2") and isinstance(think, bool):
+    if quality == "playground" and isinstance(think, bool):
         opts["planThinking"] = think
     # Page colours (the composer's Options): the page opens and exports in light or dark. Absent = follow the reader's setting.
     color = _get(body, "colorMode")
     if color in ("light", "dark"):
         opts["colorMode"] = color
-    # Quality 2.0 test runs (scripts/variety.mjs): every version and audit in the done event. The app never sends it.
-    if quality == "quality-deep" and _get(body, "debugVersions") is True:
-        opts["debugVersions"] = True
-    # Code Lab test runs (scripts/variety.mjs): the widgets Jev's review rejected, in the done event. The app never sends it.
-    if quality in ("code-lab", "code-lab-2", "code-lab-3", "code-lab-7", "playground", "playground-2") and _get(body, "debugRejected") is True:
+    # Explorer test runs (scripts/variety.mjs): the playgrounds Jev's review rejected, in the done event. The app never sends it.
+    if quality == "playground" and _get(body, "debugRejected") is True:
         opts["debugRejected"] = True
     # Retry (the app's "↻ Retry"): what the explainer being replaced had, so the fresh one takes a different route.
     avoid = _parse_avoid(_get(body, "avoid"))
     if avoid:
         opts["avoid"] = avoid
+    # The first-message step (modes/intake.py): the conversation so far when it has no page yet (shaped by history_text),
+    # and direct: build without the step (the reader already chose to build).
+    hist = _get(body, "history")
+    if isinstance(hist, list):
+        turns = [js_slice(h, 0, HISTORY_CHARS) for h in hist[-MAX_HISTORY:] if isinstance(h, str) and h.strip()]
+        if turns:
+            opts["history"] = turns
+    if _get(body, "direct") is True:
+        opts["direct"] = True
     # A follow-up in a conversation: revise the explainer above, or a related new one.
     f = parse_follow_up(_get(body, "followUp"))
     if isinstance(f, str):
@@ -117,7 +118,8 @@ def _parse_avoid(v: Any) -> dict | None:
 
 
 def _order(opts: dict) -> dict:
-    return {k: opts[k] for k in ("effort", "interactivity", "level", "extras", "reviewRounds", "planThinking", "colorMode", "avoid", "debugVersions", "debugRejected") if k in opts}
+    return {k: opts[k] for k in ("effort", "interactivity", "level", "extras", "planThinking", "colorMode", "avoid", "debugRejected", "history",
+                                    "direct") if k in opts}
 
 
 def parse_chat(body: Any) -> dict | str:

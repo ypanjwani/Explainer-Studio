@@ -8,13 +8,15 @@
 // Before accounts existed, history lived only in the browser ("explainer-studio" database);
 // legacyRecords()/importLegacy() move it into the account once.
 
-import type { ExplainerSpec, FollowUpPlan, GenerateRequest, PickOption, PlanOption, ProgressStep, SectionResponse, Usage } from "../../../shared/spec";
+import type { ExplainerSpec, FollowUpPlan, GenerateRequest, PlanOption, ProgressStep, SectionResponse, StepPreview, Usage } from "../../../shared/spec";
+
+export interface StepState { status: "running" | "done"; detail?: string; at?: number; preview?: StepPreview }
 
 /** Follow-ups v3: what the reader is asked before a plan runs (ExplainerRecord.plan). */
 export type PlanState =
   | { kind: "ask"; question: { text: string; options: PlanOption[] } }
   | { kind: "confirm"; plan: FollowUpPlan; summary: string[] }
-  | { kind: "cannot"; reason: string; alternative: PlanOption | null };
+  | { kind: "cannot"; reason: string; alternative: PlanOption | null; newTopic?: boolean; brief?: string };
 import { ApiError, apiJSON } from "../auth";
 import type { ChatMsg } from "../render/chatbot";
 import type { Progress } from "../render/explainer";
@@ -29,14 +31,12 @@ export interface ExplainerRecord {
   request: GenerateRequest;
   /**
    * "asking": a Quality request waiting for the answer to "What do you want to add to each section?".
-   * "deciding": a follow-up whose meaning wasn't clear (or is still being routed): revise the
-   * explainer above, or a new one? (Old records may say "choosing"; app.ts turns those into errors.)
-   * "picking": a revise follow-up on a Playground or Quick read page, being matched to sections (POST /api/followup/pick),
-   * or waiting for the reader's answer to `pick.question`.
+   * "deciding": old records only: a follow-up the removed router (Nov 13 2026) couldn't place; app.ts turns those into
+   * errors whose Try again goes through the plan step. (Old records may also say "choosing"; also turned into errors.)
+   * "picking": a follow-up under a Reader or Explorer page, being read by the plan step (POST /api/followup/plan), or
+   * waiting for the reader to act on `plan` (a question, a plan to confirm, a refusal, or a new topic to start).
    */
   status: "deciding" | "asking" | "picking" | "generating" | "done" | "error";
-  /** "picking": the question the reader is asked when the request could mean quite different changes. */
-  pick?: { question: { text: string; options: PickOption[] } };
   /**
    * Follow-ups v3, "picking": what /api/followup/plan answered and the reader still has to act on: a question (options +
    * "add detail"), a plan to confirm (big or destructive changes), or a request the page can't do (with an alternative).
@@ -44,6 +44,10 @@ export interface ExplainerRecord {
   plan?: PlanState;
   /** Follow-ups v3: a reply in the thread ("done" with no spec, not a new version): an answer to a question, or "checked, nothing needed changing". */
   answer?: string;
+  /** Follow-ups v5: the answer lists fixes the agent would make (OFFER_PREFIX): shown with a "Yes, make these fixes" button. */
+  offersFix?: boolean;
+  /** First message (ANSWER_PREFIX): a brief the answer offers to build, shown as a "Make an explainer about this" button. */
+  offer?: string;
   /** Follow-ups v3, "Undo": this version is a copy of version `reverted` (no AI call). */
   reverted?: number;
   /** Conversation: the id of its first record (absent = this record starts its own conversation). */
@@ -52,18 +56,19 @@ export interface ExplainerRecord {
   followUp?: { kind: "revise" | "new"; baseId: string; add?: true };
   /** Revisions: 2, 3… (the first explainer is version 1). */
   version?: number;
+  /** Follow-ups v5: this version was made from an older one than the version above it ("Made from version 3"). */
+  madeFrom?: number;
   /**
    * "↻ Retry": the id of the explainer this fresh one replaces. That one stays hidden while this builds; it is deleted
    * once this is done (then the field is dropped), and comes back if this fails (shell/app.ts settleRetry).
    */
   replaces?: string;
-  steps: Partial<Record<ProgressStep, { status: "running" | "done"; detail?: string }>>;
+  /** Live progress. at: when the step started (ms; the progress ring times the running step); preview: what the locked card shows early. */
+  steps: Partial<Record<ProgressStep, StepState>>;
   error?: string;
   spec?: ExplainerSpec;
   progress: Progress;
   chat: ChatMsg[];
-  /** Edit chat: the page as generated, kept from the first edit so it can be restored. */
-  originalSpec?: ExplainerSpec;
   /** Token usage and cost of the generation (absent for older records). */
   usage?: Usage;
   /** Section tool answers ("Another way", "Search the web"), keyed "<stage id>:<tool>", oldest first. */

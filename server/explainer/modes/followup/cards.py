@@ -123,6 +123,63 @@ def block_line(b: dict) -> str:
     return f"{t}" + (f' "{_clip(title, 80)}"' if title else "")
 
 
+# What a card's variant means, so a reader of the page text doesn't take a "mistake" card's title (the wrong belief it
+# corrects) for a claim the page makes.
+CARD_KINDS = {"mistake": "common mistakes: each title is the wrong belief, the text under it corrects it",
+              "rule": "rules of thumb", "definition": "definitions", "tip": "tips", "claim": "claims",
+              "keynumber": "key numbers"}
+
+
+def _questions(b: dict) -> str:
+    """A quiz's or predict block's questions with their choices, the right answer and the explanation."""
+    qs = b.get("questions") if b.get("type") == "quiz" else [{"q": b.get("question"), **b}]
+    out = []
+    for q in qs or []:
+        if not isinstance(q, dict):
+            continue
+        choices = [str(c) for c in q.get("choices") or []]
+        a = q.get("answer")
+        right = choices[a] if isinstance(a, int) and 0 <= a < len(choices) else ""
+        out.append(f"Q: {q.get('q') or ''} Choices: {' / '.join(choices)}. Right: {right}. Why: {q.get('explain') or ''}")
+    return "\n".join(out)
+
+
+def block_full(b: dict) -> str:
+    """One block's whole content as plain text (not cut like block_line): every reading block, quizzes, predicts, the
+    concept map, formulas, and a one-line description of charts and playgrounds (their numbers come from the readings)."""
+    t = b.get("type")
+    if t == "cards":
+        kind = CARD_KINDS.get(str(b.get("variant") or ""), "")
+        return (f"[cards: {kind}]\n" if kind else "[cards]\n") + block_text(b)
+    if t in ("quiz", "predict"):
+        return f"[{t}]\n" + _questions(b)
+    if t == "conceptmap":
+        nodes = {n.get("id"): n.get("label") for n in b.get("nodes") or [] if isinstance(n, dict)}
+        lines = [f"- {n.get('label')} ({n.get('sub') or ''}): {n.get('desc') or ''}" for n in b.get("nodes") or [] if isinstance(n, dict)]
+        lines += [f"- {nodes.get(e.get('from'))} -> {nodes.get(e.get('to'))}: {e.get('label') or ''}" for e in b.get("edges") or [] if isinstance(e, dict)]
+        return f"[concept map: {b.get('title') or ''}]\n" + "\n".join(lines)
+    if t == "formula":
+        return f"[formula] {b.get('latex') or ''}" + (f" ({b['caption']})" if b.get("caption") else "")
+    words = block_text(b)
+    if words:
+        return f"[{t}]\n{words}" if t != "text" else words
+    return f"[{block_line(b)}]"
+
+
+def page_text(page: dict) -> str:
+    """The whole page as text for the follow-up's talk step: every section (S1, S2 ...) with every block in full, then the
+    glossary. Unlike common.outline_context (text, callouts, formulas and cards only), tables, tabs, comparisons, flip
+    cards, reveals, quizzes and predicts are all in, so a check of the page sees the numbers in a table row too."""
+    lines = [f"Explainer: {page.get('title') or ''} — {page.get('subtitle') or ''}", f"Key intuition: {page.get('keyIntuition') or ''}"]
+    for i, st in enumerate(page.get("stages") or []):
+        lines.append(f"\n## S{i + 1} \"{st.get('label') or ''}\"\n{st.get('blurb') or ''}")
+        lines += [x for x in (block_full(b) for b in st.get("blocks") or [] if isinstance(b, dict)) if x]
+    gloss = [f"- {g.get('term')}: {g.get('definition')}" for g in page.get("glossary") or [] if isinstance(g, dict)]
+    if gloss:
+        lines.append("\nGlossary:\n" + "\n".join(gloss))
+    return "\n".join(lines)
+
+
 # from followup_pick.py
 MODES = ("playground", "lite-plus")  # the pages whose typed follow-ups are picked here (not Playground 2.0)
 

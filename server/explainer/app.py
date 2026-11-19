@@ -4,7 +4,7 @@ Routes (each module's docstring has the details):
   /api/auth/*        accounts: register, login, refresh, logout, me, password, delete   (routes/auth.py)
   /api/explainers/*  the signed-in reader's saved history                                 (routes/history.py)
   /api/share, /s/<id>  public share links: a read-only copy of one explainer               (routes/share.py)
-  /api/generate, /api/chat, /api/edit, /api/route, /api/section, /api/formula  the AI calls, signed in (routes/ai.py)
+  /api/generate, /api/chat, /api/followup/plan, /api/section, /api/formula  the AI calls, signed in (routes/ai.py)
 
 Every request goes through middleware.py (request id, Origin/CORS, JSON, security headers, JSON errors).
 In production the same app serves the built frontend (../dist), so the API is same-origin.
@@ -15,14 +15,12 @@ Settings (environment, or explainer-studio/.env in development; the account and 
   ALLOWED_ORIGINS        comma-separated origins allowed to call /api (default: the Vite dev origins; the app's own origin is always allowed)
   PLAN_EFFORT            default planning effort for requests that send none: low | medium | high (default medium)
   FACTCHECK_SECTIONS     1 = the fact check also asks whether each statement agrees with its own section (evals; default off)
-  CHART_BLOCK            0 = turn the chart block off: the Quality+ planner gets the old OUTLINE_SYSTEM and experiments stay (default on; chartpick.py)
+  CHART_BLOCK            0 = turn the chart block off in follow-up edits (default on; modes/followup/run.py)
   RATELIMIT_STORAGE_URI  e.g. redis://... (default memory://, fine for one process)
   TRUST_PROXY            1 behind a proxy that sets X-Forwarded-For (Render does), so limits key on the real client IP
   TRUST_PROXY_HOPS       how many proxies in front of the app set X-Forwarded-For (default 1: Render alone; 2 with a CDN
                          such as Cloudflare in front of Render). Too low and every visitor shares one rate-limit bucket (audit F32)
-  ALLOW_HIDDEN_MODES     1 = /api/generate also runs the hidden/retired modes (smart, scene-plus, code-lab, code-lab-2,
-                         code-lab-3) for test scripts; otherwise they run as Quality+ (audit F09). Never set it in production
-  ALLOW_DEBUG            1 = honour debugVersions / debugRejected (scripts/variety.mjs); otherwise ignored (audit F10)
+  ALLOW_DEBUG            1 = honour debugRejected (scripts/variety.mjs); otherwise ignored (audit F10)
   EXPLAINER_NO_DOTENV    1 = don't read explainer-studio/.env (the tests set it, so they never pick up real API keys; audit F29)
   EXPLAINER_DIST         where the built frontend is (default ../dist; the Docker image sets it)
 """
@@ -47,7 +45,7 @@ from .db import Database
 from .middleware import ApiError, Ctx
 from .modes.followup.page_index import PageIndexStore
 from .paper_cache import PaperStore
-from .routes import ai, auth, history, preferences, share
+from .routes import ai, auth, history, share
 
 ROOT = Path(__file__).resolve().parents[2]  # explainer-studio/ (when run from the source tree)
 DIST = Path(os.environ.get("EXPLAINER_DIST") or ROOT / "dist")  # the built frontend
@@ -93,12 +91,11 @@ def create_app() -> Flask:
         "plan_effort": os.environ.get("PLAN_EFFORT") if os.environ.get("PLAN_EFFORT") in ("low", "high") else "medium",
         "paper_cache": PaperStore(db),
         "page_index": PageIndexStore(db),
-        "allow_hidden_modes": os.environ.get("ALLOW_HIDDEN_MODES") == "1",
         "allow_debug": os.environ.get("ALLOW_DEBUG") == "1",
     }
 
     middleware.install(app)
-    for bp in (auth.bp, history.bp, ai.bp, preferences.bp, share.bp, share.page_bp):
+    for bp in (auth.bp, history.bp, ai.bp, share.bp, share.page_bp):
         app.register_blueprint(bp)
 
     @app.get("/api/health")

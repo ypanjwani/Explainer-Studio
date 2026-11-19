@@ -10,7 +10,8 @@ import json
 import pytest
 
 from explainer import history, modes
-from explainer.modes.followup import check as feedback_check, playground_edit as ce, run as R, section_editor as se, steps as S
+from explainer.modes.followup import check as feedback_check, playground_edit as ce, run as R
+from explainer.modes.followup.v3 import section_editor as se, steps as S
 from explainer.core.validate import default_design
 from explainer.followup import parse_follow_up
 from explainer.llm import ReaderError
@@ -164,6 +165,15 @@ def test_a_merge_writes_the_kept_section_then_removes_the_other(monkeypatch):
     spec = pipe.run([], [step("merge_sections", "loop", "fold it in", other="summary")])
     assert 'stage "loop"' in pipe.seen["planner"][0] and '"id":"summary"' in pipe.seen["planner"][0].replace(" ", "")
     assert [s["id"] for s in spec["stages"]] == IDS[:-1] and spec["revision"]["removed"] == 1
+
+
+def test_a_title_change_alone_is_a_change_not_an_error(monkeypatch):
+    """Nov 14: "Can you change the title?" wrote a new title but no section, so run_plan saw nothing changed and raised
+    "Nothing on the page was changed", throwing the new title away."""
+    pipe = Pipe(monkeypatch, planner=[{"changes": {"title": "A Brand New Title"}}])
+    spec = pipe.run([], [step("edit_page_meta", what="a new title")], text="Can you change the title?")
+    assert spec["title"] == "A Brand New Title" and [s["id"] for s in spec["stages"]] == IDS
+    assert spec["revision"]["steps"][0]["status"] == "done" and spec["revision"]["replaced"] == 0
 
 
 def test_a_new_section_is_offered_a_playground_by_the_gate(monkeypatch):

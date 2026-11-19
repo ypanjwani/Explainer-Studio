@@ -20,7 +20,7 @@ from ..core.spec import parse_outline
 from ..core.validate import without_blocks
 from ..notes import note_fields, write_notes
 from ..pricing import UsageLog
-from .common import (LITE_BUDGET, Emit, _prompt, _step, drops_examples, finish_spec, level_from_brief, plan_detail, planner_hint,
+from .common import (LITE_BUDGET, Emit, _prompt, _step, plan_preview, drops_examples, finish_spec, level_from_brief, plan_detail, planner_hint,
                      read_source, write_outline)
 
 QUALITY = "lite-plus"
@@ -55,7 +55,7 @@ def generate(client: anthropic.Anthropic, req: dict, emit: Emit, jev_key: str | 
     outline = without_blocks(outline, set(data.constants()["LITE_DROPPED"]))
     if drops_examples(req.get("extras")):
         outline = without_blocks(outline, {"examples"})
-    _step(emit, "plan", "done", f"{len(outline['stages'])} stages")
+    _step(emit, "plan", "done", f"{len(outline['stages'])} stages", plan_preview(outline))
 
     spec = finish_spec(client, req, follow, outline, request, brief, source_context, [*early_warnings, *warnings], usage, emit,
                        {"noAsk": True, "noControls": True})

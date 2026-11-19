@@ -77,6 +77,8 @@ def haiku_reply(params: dict) -> str:
                            "question": {"text": "", "options": []}, "reason": "", "alternative": {"label": "", "sections": [], "steps": []}})
     if system == p("INDEX_SYSTEM"):
         return "{}"
+    if system == p("MAIN_FILE_SYSTEM"):  # follow-ups v5's main file: the code part alone
+        return json.dumps({"sections": []})
     if p("SECTION_EDIT_NOTE") in user:
         section = json.loads(user.split("\n\n" + p("SECTION_EDIT_NOTE"))[0])["section"]
         blocks = [{**b, "md": "Clearer: " + b["md"]} if i == 0 and b.get("type") == "text" else b for i, b in enumerate(section["blocks"])]

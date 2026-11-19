@@ -4,18 +4,12 @@
                          also saves progress and the result to that history record (history.py), so a
                          generation finishes even if the tab is closed.
   POST /api/chat      -> SSE stream of {t: text} deltas, then {done: true}
-  POST /api/edit      -> JSON {content, usd}: one Edit chat turn (Haiku picks tools; the browser runs them)
-  POST /api/route     -> JSON {kind, usd}: does a follow-up revise the explainer above or ask for a new one?
-  POST /api/followup/pick -> JSON {targets, pageWide} | {question} | {error}, + usd: the sections a typed follow-up
-                         on a Playground or Quick read page changes (followup_pick.py)
-  POST /api/followup/plan -> JSON {kind: change|ask|cannot|answer|revert|off, ...} | {error}, + usd: follow-ups v3, what
-                         the follow-up asks (understand.py, FOLLOWUP_PLAN=1)
+  POST /api/followup/plan -> JSON {kind: change|ask|cannot|answer|revert, ...} | {error}, + usd: what the follow-up
+                         asks (modes/followup/entry.py: v4's talk step under FOLLOWUP_V4=1, else v3's understand)
   POST /api/section   -> JSON {md, sources, searches, usd}: a section tool the reader clicked (web search)
   POST /api/formula   -> JSON {note, usd}: "Go deeper" on a formula (formula.py); the app saves the note on the page
-  POST /api/feedback  -> JSON {feedbackId, plan, preference, usd}: the Feedback button (feedback.py), a plan the
-                         reader confirms
-  POST /api/feedback/<id>/confirm -> JSON {feedback, preference}: no AI call; the app then runs the confirmed
-                         change as a revise follow-up carrying FollowUp.feedback
+
+/api/generate runs only Reader and Explorer (modes/); anything else is refused (400 mode_off).
 """
 
 from __future__ import annotations
@@ -27,16 +21,14 @@ from typing import Any, Callable
 from flask import Blueprint, Response, current_app, g
 from limits import parse as parse_limit
 
-from .. import data, feedback, followup_pick, history, quota, sse
-from ..modes.followup import steps  # follow-ups v3 (POST /api/followup/plan)
-from ..edit_chat import edit_turn, parse_edit
-from ..followup import parse_route, route_follow_up
+from .. import data, history, quota, sse
+from ..modes.followup import entry as followup_entry  # POST /api/followup/plan (v3, v4 or v5)
+from ..modes.followup import run as followup_run  # is_agent: a follow-ups v5 run (past the day's explainers: answer-only)
 from ..formula import formula_turn, parse_formula
 from ..llm import HAIKU, friendly_error
 from ..middleware import ApiError, ctx, json_body, json_response, rate_limit, require_auth
 from .. import modes  # Reader and Explorer's own pipelines (new pages)
-from ..deepen import generate_deep  # legacy modes: review rounds
-from ..pipeline import generate  # legacy modes, and revise follow-ups of every mode (Stage B of the modes split)
+from ..modes import intake  # FIRST_TALK: a new page's message is read first (answered, or built from a brief)
 from ..pricing import UsageLog, price_of
 from ..requests import parse_chat, parse_generate
 from ..schemas import RECORD_ID
@@ -45,14 +37,13 @@ from ..section import parse_section, section_turn
 log = logging.getLogger("explainer")
 bp = Blueprint("ai", __name__, url_prefix="/api")
 
-# Per-user caps: generations, and chat/edit/route/section messages together.
+# Per-user caps: generations, and chat/follow-up plan/section/formula messages together.
 GEN_LIMIT = parse_limit("3/minute")
 CHAT_LIMIT = parse_limit("20/minute")
 
-# Modes the app no longer offers (CLAUDE.md: Smart has no button, Lab and Code Lab 1-3 are hidden). The code is
-# kept, but only test scripts may run them, with ALLOW_HIDDEN_MODES=1; anyone else gets Quality+ (audit F09).
-HIDDEN_MODES = ("smart", "scene-plus", "code-lab", "code-lab-2", "code-lab-3")
-DEBUG_FLAGS = ("debugVersions", "debugRejected")  # scripts/variety.mjs only, with ALLOW_DEBUG=1 (audit F10)
+DEBUG_FLAGS = ("debugRejected",)  # scripts/variety.mjs only, with ALLOW_DEBUG=1 (audit F10)
+# What /api/generate answers for anything Reader and Explorer don't run (an old mode's page, an old app tab, a script).
+MODE_OFF_MESSAGE = "This page was made with an older mode that's no longer available. Start a new conversation to change it."
 
 
 class GenerationCancelled(BaseException):
@@ -60,12 +51,8 @@ class GenerationCancelled(BaseException):
     pipeline's own `except Exception` fallbacks let it through and the run stops at its next step."""
 
 
-def _policy(ai: dict[str, Any], body: Any, req: dict) -> dict:
+def _policy(ai: dict[str, Any], req: dict) -> dict:
     """What the server allows of a parsed GenerateRequest, whatever the client sent."""
-    if req["quality"] in HIDDEN_MODES and not ai.get("allow_hidden_modes"):
-        req = parse_generate({**body, "quality": "quality-plus"})  # re-parsed, so mode-only options are dropped
-        if isinstance(req, str):
-            raise ApiError(400, req, "invalid")
     if not ai.get("allow_debug"):
         req = {k: v for k, v in req.items() if k not in DEBUG_FLAGS}
     return req
@@ -101,21 +88,26 @@ def generate_route() -> Response:
     rate_limit(GEN_LIMIT, "gen", user_id, "Too many explainers at once. Please wait a minute.")
     body = json_body()
     req = _parsed(parse_generate, body)
-    req = _policy(ai, body, req)
-    # The reader's saved preferences (feedback.py), loaded here so only the server can set them; the pipeline adds
-    # them to the planner's hint. None saved: nothing changes.
-    if feedback.prefs_enabled():
-        prefs = feedback.active_prefs(c.db, user_id)
-        if prefs:
-            req = {**req, "prefs": prefs}
-    record_id = body.get("recordId") if isinstance(body, dict) else None
-    if record_id is not None and (not isinstance(record_id, str) or not RECORD_ID.match(record_id)):
-        raise ApiError(400, "Invalid record id.", "invalid")
-    event_id = quota.start_generation(c.settings, c.db, user_id)
+    req = _policy(ai, req)
+    # Only Reader and Explorer run (modes/): anything else is refused before it counts as one of today's explainers.
+    if not modes.handles(req):
+        raise ApiError(400, MODE_OFF_MESSAGE, "mode_off")
+    # recordId: the history record to fill. baseId: the record a revise follow-up changes; replaces: the record a Retry
+    # or Edit replaces (both decide the version number, history.version_meta).
+    ids = {k: body.get(k) if isinstance(body, dict) else None for k in ("recordId", "baseId", "replaces")}
+    for v in ids.values():
+        if v is not None and (not isinstance(v, str) or not RECORD_ID.match(v)):
+            raise ApiError(400, "Invalid record id.", "invalid")
+    record_id = ids["recordId"]
+    # Follow-ups v5: the agent also answers questions, which must keep working past the day's explainers; then it runs
+    # answer-only (no page, so not counted).
+    # The first-message step (intake.py) answers too, so it runs past the day's explainers in the same way.
+    agent = followup_run.is_agent(req) or intake.runs(req)
+    answer_only = agent and quota.over_daily(c.settings, c.db, user_id)
+    event_id = quota.start_generation(c.settings, c.db, user_id, allow_over=agent)
     try:
-        budget = quota.remaining_usd(c.settings, c.db, user_id)
         if record_id:
-            history.start_generation(c.db, user_id, record_id)
+            history.start_generation(c.db, user_id, record_id, req, ids["baseId"], ids["replaces"])
     except Exception:
         # The run never starts, so it mustn't count as one of today's or stay "running" (audit F12).
         quota.finish_generation(c.db, event_id, 0.0, failed=True)
@@ -131,26 +123,20 @@ def generate_route() -> Response:
         usage = UsageLog("")
         usd, failed = 0.0, True
         try:
-            # Review rounds (deepen.py): quality-deep, or any mode with reviewRounds. They are where one run can cost
-            # many times the allowance, so they stop once today's budget is spent (audit F07).
-            deep = req["quality"] == "quality-deep" or req.get("reviewRounds")
-            kw = {"jev_key": ai["jev_key"], "plan_effort": ai["plan_effort"], "paper_cache": ai["paper_cache"], "usage": usage}
-            # A new Reader or Explorer page runs on its own pipeline (modes/); MODES_SPLIT=0 sends it back to the old one.
-            r = (generate_deep(ai["client"], req, emit, usd_budget=budget, **kw) if deep
-                 else modes.generate(ai["client"], req, emit, page_index=ai.get("page_index"), **kw) if modes.handles(req)
-                 else generate(ai["client"], req, emit, page_index=ai.get("page_index"), **kw))
+            kw = {"jev_key": ai["jev_key"], "plan_effort": ai["plan_effort"], "paper_cache": ai["paper_cache"], "usage": usage,
+                  "db": c.db, "user_id": user_id, "base_id": ids["baseId"],  # follow-ups v5 load the base from the version store
+                  **({"answer_only": True} if answer_only else {})}
+            r = modes.generate(ai["client"], req, emit, page_index=ai.get("page_index"), **kw)
             u = r["usage"]
             usd, failed = u["totalUsd"], False
             cached = sum(s["cacheRead"] for s in u["steps"])
             fresh = sum(s["input"] + s["cacheWrite"] for s in u["steps"])
             log.info('generated "%s" (%s, %s effort) $%.4f in %ss; prompt cache %d%% of input', r["spec"]["title"], u["quality"], u["effort"],
                      usd, u["seconds"], round(100 * cached / max(1, cached + fresh)))
-            emit({"type": "done", "spec": r["spec"], "usage": u, **({"versions": r["versions"]} if req.get("debugVersions") and "versions" in r else {}),
-                  **({"rejected": r["rejected"]} if req.get("debugRejected") and r.get("rejected") else {}),
-                  **({"labMarks": r["labMarks"]} if req.get("debugRejected") and r.get("labMarks") else {}),
-                  **({"labMath": r["labMath"]} if req.get("debugRejected") and r.get("labMath") else {}),
-                  **({"labLook": r["labLook"]} if req.get("debugRejected") and r.get("labLook") else {}),
-                  **({"labBlueprint": r["labBlueprint"]} if req.get("debugRejected") and r.get("labBlueprint") else {})})
+            # Explorer test runs (scripts/variety.mjs, debugRejected): what Jev's review rejected, the writer's marks, the look check.
+            debug = {k: r[k] for k in ("rejected", "labMarks", "labLook") if req.get("debugRejected") and r.get(k)}
+            # startFrom: a v5 follow-up that went back to another version (history gives the new version that parent).
+            emit({"type": "done", "spec": r["spec"], "usage": u, **debug, **({"startFrom": r["startFrom"]} if r.get("startFrom") else {})})
         except GenerationCancelled:
             usd = usage.summary()["totalUsd"]  # what was spent until it stopped still counts
             log.info("generation for deleted record %s stopped after $%.4f", record_id, usd)
@@ -169,7 +155,7 @@ def generate_route() -> Response:
 
 
 def _chat_turn(kind: str, message: str, run: Callable[[Any], dict], parse: Callable[[Any], Any]) -> Response:
-    """A one-shot JSON call (edit, route, section, formula): limits, allowance, then the reply with its cost recorded."""
+    """A one-shot JSON call (route, follow-up plan, section, formula): limits, allowance, then the reply with its cost recorded."""
     ai = _ai()
     c = ctx()
     rate_limit(CHAT_LIMIT, "chat", g.user.id, message)
@@ -190,37 +176,17 @@ def _chat_turn(kind: str, message: str, run: Callable[[Any], dict], parse: Calla
     return json_response(r)
 
 
-@bp.post("/route")
-@require_auth
-def route_route() -> Response:
-    return _chat_turn("route", "Too many messages at once. Please wait a minute.", route_follow_up, parse_route)
-
-
-@bp.post("/followup/pick")
-@require_auth
-def followup_pick_route() -> Response:
-    """A typed follow-up on a Playground or Quick read page: which sections it changes, or a question for the reader
-    (followup_pick.py). Not one of the day's explainers; its cost is recorded."""
-    jev_key = _ai()["jev_key"]
-    return _chat_turn("followup-pick", "Too many messages at once. Please wait a minute.",
-                      lambda client, req: followup_pick.handle(client, jev_key, req), followup_pick.parse_pick_request)
-
-
 @bp.post("/followup/plan")
 @require_auth
 def followup_plan_route() -> Response:
-    """Follow-ups v3 (understand.py, FOLLOWUP_PLAN=1): a typed follow-up on a Playground or Quick read page as the sections
-    it is about (with the reader's intent) and structural steps, a question, a refusal or an answer; {"kind": "off"} when the
-    flag is off. Not one of the day's explainers; its cost is recorded."""
+    """A typed follow-up on a Reader or Explorer page, read by modes/followup/entry.py (v4's talk step under FOLLOWUP_V4=1,
+    else v3's understand): a change, a question, a refusal, an answer or an undo. Not one of the day's explainers; its cost
+    is recorded."""
     ai = _ai()
     return _chat_turn("followup-plan", "Too many messages at once. Please wait a minute.",
-                      lambda client, req: steps.handle(client, ai.get("page_index"), req), steps.parse_plan_request)
-
-
-@bp.post("/edit")
-@require_auth
-def edit_route() -> Response:
-    return _chat_turn("edit", "Too many edits at once. Please wait a minute.", edit_turn, parse_edit)
+                      lambda client, req: followup_entry.handle(client, ai.get("page_index"), req, db=ctx().db, user_id=g.user.id,
+                                                                jev_key=ai["jev_key"]),
+                      followup_entry.parse_plan_request)
 
 
 @bp.post("/section")
@@ -234,32 +200,6 @@ def section_route() -> Response:
 def formula_route() -> Response:
     """"Go deeper" on a formula (formula.py): one Haiku call on the click; the app saves the note on the page."""
     return _chat_turn("formula", "Too many requests at once. Please wait a minute.", formula_turn, parse_formula)
-
-
-@bp.post("/feedback")
-@require_auth
-def feedback_route() -> Response:
-    """The Feedback button, step 1: one Haiku call that turns the feedback into a plan for the reader to confirm.
-    Nothing is saved for the reader yet (see /feedback/<id>/confirm)."""
-    db, user_id = ctx().db, g.user.id
-    return _chat_turn("feedback", "Too many messages at once. Please wait a minute.",
-                      lambda client, req: feedback.handle(client, db, user_id, req), feedback.parse_feedback)
-
-
-@bp.post("/feedback/<feedback_id>/confirm")
-@require_auth
-def feedback_confirm_route(feedback_id: str) -> Response:
-    """The Feedback button, step 2 (no AI call): the change the reader confirmed, and their preference when "Remember" is
-    ticked. Returns {feedback: FollowUp.feedback | null, preference | null}; the app then runs the change."""
-    c = ctx()
-    rate_limit(CHAT_LIMIT, "chat", g.user.id, "Too many messages at once. Please wait a minute.")
-    try:
-        r = feedback.confirm(c.db, g.user.id, feedback_id, json_body())
-    except ValueError as e:
-        raise ApiError(409, str(e), "used") from None
-    if r is None:
-        raise ApiError(404, "Not found.")
-    return json_response(r)
 
 
 def chat_system(context: str) -> list[dict]:

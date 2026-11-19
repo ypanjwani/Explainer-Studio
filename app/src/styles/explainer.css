@@ -218,13 +218,9 @@ a.x-flow-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); bo
   .x-glossary dd { margin-bottom: 8px; }
 }
 
-/* Drawer tabs (the app adds Edit chat next to "Ask about this") */
+/* The Ask drawer */
 .x-chat-drawer { display: flex; flex-direction: column; }
 .x-drawer-pane { flex: 1; min-height: 0; }
-.x-drawer-pane[hidden] { display: none; }
-.x-drawer-tabs { display: flex; gap: 4px; padding: 10px 12px 0; border-bottom: 1px solid var(--border); }
-.x-drawer-tab { border: 0; background: transparent; padding: 8px 14px; border-radius: 10px 10px 0 0; cursor: pointer; font: inherit; font-size: 0.9rem; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
-.x-drawer-tab[aria-selected="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
 
 /* ---------- Page brief look-and-feel (spec.design.textSize / density / emphasis) ---------- */
 .explainer[data-size="small"] .x-blocks { font-size: 0.94rem; }

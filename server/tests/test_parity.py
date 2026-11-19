@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from explainer.core import compact, examples, expr, factcheck, lab, references, spec, validate
+from explainer.core import compact, examples, expr, factcheck, references, spec, validate
 from explainer.js import js_str, to_fixed, to_precision
 
 CORPUS = Path(__file__).parent / "parity"
@@ -166,11 +166,3 @@ def test_compact():
         else:
             same(norm(compact.parse_compact(c["text"])), c["result"], c["text"][:80])
 
-
-def test_lab():
-    for c in load("lab"):
-        parsed = lab.parse_lab_outline(c["raw"])
-        same(norm(parsed), c["parsed"], "lab parse")
-        if "outline" in parsed:
-            same(lab.briefs_of(parsed["outline"]), c["briefs"], "briefs")
-            same(lab.merge_bundles(parsed["outline"], dict(c["bundles"])), c["merged"], "merge")

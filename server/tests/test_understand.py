@@ -3,7 +3,8 @@ a refusal, an answer or an undo; knock-on intents from the page map; the budget 
 
 from __future__ import annotations
 
-from explainer.modes.followup import understand as U
+from explainer.modes.followup import entry
+from explainer.modes.followup.v3 import understand as U
 from explainer.core.validate import default_design
 from explainer.followup import parse_follow_up, parse_plan
 from explainer.pricing import UsageLog
@@ -215,10 +216,7 @@ def test_failures_and_unplaceable_requests_are_errors():
     assert "error" in plan_of(understood(sections=[intent("ghost")]))
 
 
-def test_the_flag_is_on_by_default(monkeypatch):
-    monkeypatch.setenv("FOLLOWUP_PLAN", "0")
-    assert U.handle(fake_client(RuntimeError("not called")), None, {"page": PAGE, "text": "x", "quality": "playground"})["kind"] == "off"
-    monkeypatch.delenv("FOLLOWUP_PLAN", raising=False)
+def test_handle_returns_the_plan_and_its_cost():
     out = U.handle(fake_client(understood(sections=[intent("tokens", quote="x")])), Store(index_of(PAGE)), {"page": PAGE, "text": "x", "quality": "playground"})
     assert out["kind"] == "change" and "usd" in out
 
@@ -226,7 +224,7 @@ def test_the_flag_is_on_by_default(monkeypatch):
 def test_the_request_and_follow_up_plan_are_parsed():
     body = {"text": "make it simpler", "quality": "playground", "followUp": {**FOLLOW, "design": default_design(OLD)},
             "option": {"label": "A", "sections": [intent("tokens")], "steps": []}, "extra": "with numbers", "history": ["a", 3, "b"]}
-    req = U.parse_plan_request(body)
+    req = entry.parse_plan_request(body)
     assert req["option"]["sections"] == [intent("tokens")] and req["extra"] == "with numbers" and req["history"] == ["a", "b"]
     assert parse_plan({"sections": [intent("tokens"), {"section": "x"}, {**intent("loop"), "derived": True, "because": "y"}],
                        "steps": [step("remove_section", "loop"), {"op": "edit_text"}]}) == {
@@ -248,12 +246,10 @@ def test_the_step_list_matches_the_typescript_one():
 
 
 def test_the_plan_route(app, client, monkeypatch):
+    monkeypatch.setenv("FOLLOWUP_V5", "0")  # v5 is the default (Nov 19 2026): v3 runs only with it off
     from conftest import signup
     headers = signup(client)
     body = {"text": "the demo shows nothing", "quality": "playground", "followUp": {**FOLLOW, "design": default_design(OLD)}}
-    monkeypatch.setenv("FOLLOWUP_PLAN", "0")
-    assert client.post("/api/followup/plan", json=body, headers=headers).get_json() == {"kind": "off", "usd": 0.0}
-    monkeypatch.delenv("FOLLOWUP_PLAN", raising=False)
     index_reply = {"sections": [{"id": i, "introduces": [], "uses": [], "refersTo": [], "claims": [], "playgroundLevel": ""} for i in IDS]}
     app.extensions["explainer_ai"]["client"] = fake_client(index_reply, understood(sections=[intent("sampling", "make it work", "shows nothing")]))
     out = client.post("/api/followup/plan", json=body, headers=headers).get_json()

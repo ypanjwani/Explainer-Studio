@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SAMPLE_DESIGN, SAMPLE_OUTLINE } from "../shared/sample";
 import { Block, PromptBlock, type Outline } from "../shared/spec";
 import { assembleSpec, WIDGET_MAX_CHARS } from "../shared/validate";
-import { LAB_SYSTEM, OUTLINE_SYSTEM } from "../prompts/prompts";
+import { OUTLINE_SYSTEM } from "../prompts/prompts";
 
 const W = '<div id="o"></div><script>document.getElementById("o").textContent = "1";</script>';
 
@@ -19,6 +19,5 @@ describe("freeform widgets", () => {
   it("never offers widgets to the planner", () => {
     expect(PromptBlock.safeParse({ type: "widget", title: "t", html: W }).success).toBe(false);
     expect(OUTLINE_SYSTEM).not.toContain('"widget"');
-    expect(LAB_SYSTEM).not.toContain('"widget"');
   });
 });

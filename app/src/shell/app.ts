@@ -10,41 +10,35 @@
 
 import { derivePalette } from "../../../shared/color";
 import { buildFollowUp } from "../../../shared/followup";
-import { CHECKED_PREFIX, LIMITS, PICK_MODES, formulaKey, isQuality, type ExplainerSpec, type FollowUp, type FollowUpPick, type GenerateRequest, type FollowUpPlan, type PlanOption, type PlanResponse, type ProgressStep, type RouteResponse } from "../../../shared/spec";
-import { chat, ConnectionLost, formulaDeeper, generateExplainer, pickFollowUp, planFollowUp, routeFollowUp, sectionTool, type FeedbackConfirmed } from "../api";
-import { openFeedbackDialog } from "./feedback";
+import { ANSWER_PREFIX, ASKED_PREFIX, CHECKED_PREFIX, LIMITS, NEW_TOPIC_BRIEF_PREFIX, NEW_TOPIC_PREFIX, OFFER_PREFIX, PLAN_MODES, formulaKey, isQuality, type ExplainerSpec, type GenerateRequest, type FollowUpPlan, type PlanOption, type PlanResponse, type ProgressStep } from "../../../shared/spec";
+import { chat, ConnectionLost, formulaDeeper, generateExplainer, planFollowUp, revertVersion, sectionTool } from "../api";
 import { allowance, onAuthChange, refreshAllowance, restore, type User } from "../auth";
 import { createChat } from "../render/chatbot";
 import { h, mdToHtml, uid } from "../render/dom";
-import { inheritState, renderExplainer, storeFor, type DrawerState } from "../render/explainer";
+import { renderExplainer, type DrawerState } from "../render/explainer";
 import { exportHtml } from "../render/export";
 import { LINK_ICON, openShareDialog } from "./share";
 import { closeHistory, deleteRecord, fetchRecord, flushAll, flushRecord, getRecord, importLegacy, legacyRecords, openHistory, putRecord, type ExplainerRecord } from "../store/history";
 import { allowanceMeter, authView, legacyOffer, openAccountPanel } from "./account";
 import { createComposer, type ComposerChoices, type ComposerEl, type ComposerSubmit } from "./composer";
 import { LEVEL_CHOICES } from "../../../shared/menus";
-import { createEditPanel, type EditTarget } from "./edit";
 import { openSearchPanel, sectionText } from "./section";
 import { applyMode, isDark, loadMode, modeToggle, setRootMode } from "./mode";
 import { howLong, modeName } from "./modes";
+import { currentStep, justUnlocked, lockedCard, reading } from "./progress";
 import { extrasQuestion, extrasSummary } from "./extras";
 import type { Extra } from "../../../shared/menus";
 
-/** ✏️ Edit chat (per-part Edit buttons + the drawer's Edit tab). Hidden in every mode until version 2; the code stays. */
-const EDIT_CHAT = false;
-/**
- * Follow-ups v3 (server/explainer/understand.py): a revise follow-up on a Playground or Quick read page asks /api/followup/plan
- * first. The server answers "off" unless FOLLOWUP_PLAN=1, and the app then uses /api/followup/pick as before.
- */
-const PLAN_FOLLOWUPS = true;
-/** The Feedback button on an open explainer (feedback.ts, /api/feedback). Hidden in every mode for now; the code stays. */
-const FEEDBACK = false;
 /** "What do you want to add to each section?" (extras.ts). Hidden for v1: new explainers get no extras ("None"); the code stays. */
 const EXTRAS_QUESTION = false;
 /**
  * The AI cost on the result card ("≈ $0.006"), hidden from readers for v1 (Nov 2026). The data is still saved.
  */
 const SHOW_COST = false;
+/** Records whose "Show steps" fold the reader opened; kept across the redraws every progress event makes. */
+const STEPS_OPEN = new Set<string>();
+/** Earlier turns sent with a follow-up's plan call; keep equal to MAX_HISTORY in server/explainer/modes/followup/shared.py. */
+const HISTORY_TURNS = 12;
 
 const SUGGESTIONS = [
   { label: "Attention in transformers", text: "Explain self-attention in transformers: queries, keys, values and why it works." },
@@ -54,6 +48,7 @@ const SUGGESTIONS = [
 ];
 
 const STEP_LABEL: Record<ProgressStep, string> = {
+  intake: "Reading your message",
   read: "Reading the paper",
   summarize: "Summarizing sections",
   plan: "Planning the lesson",
@@ -95,17 +90,14 @@ export class App {
   private disposeView: (() => void) | null = null;
   private menuOpen: string | null = null;
   /** Edit chat for the open explainer: its panel and in-memory undo history. */
-  private edit: { recId: string; panel: ReturnType<typeof createEditPanel>; undo: ExplainerSpec[] } | null = null;
-  /** The Ask/Edit drawer, kept open across the re-render after each edit. */
-  private drawer: DrawerState = { open: false, tab: "ask" };
+  /** The explainer the drawer state belongs to (a different explainer starts with the drawer closed). */
+  private drawerRec: string | null = null;
+  /** The Ask drawer, kept open across re-renders of the same explainer. */
+  private drawer: DrawerState = { open: false };
   /** Closes the open section tool panel, if any. */
   private closeSection: (() => void) | null = null;
-  /** Follow-ups whose meaning (revise or new?) is still being worked out. */
-  private routing = new Set<string>();
   /** The conversation's follow-up box, kept across re-renders so typed text survives progress updates. */
   private dock: { root: string; el: HTMLElement; composer: ComposerEl } | null = null;
-  /** The open "Add section" box, under the conversation's latest explainer. */
-  private addBox?: { recId: string; el: HTMLElement };
   /** The open Edit box or Retry confirm under a prompt. Kept across re-renders, so typed text survives progress updates. */
   private promptBox?: { recId: string; kind: "edit" | "retry"; el: HTMLElement };
 
@@ -138,7 +130,7 @@ export class App {
     for (const c of this.running.values()) c.abort();
     this.running.clear();
     this.user = u;
-    this.edit = null;
+    this.drawerRec = null;
     this.dock = null;
     this.banner.replaceChildren();
     this.records = [];
@@ -159,9 +151,12 @@ export class App {
       r.error = "This explainer was waiting for a design choice that no longer exists. Try again.";
       putRecord(r);
     }
-    // A follow-up interrupted while its sections were being picked: ask "change it or new?" again (a saved question stays).
-    for (const r of this.records.filter((r) => r.status === "picking" && !r.pick && !r.plan)) {
-      r.status = "deciding";
+    // A follow-up left waiting by the old router (status "deciding", removed Nov 13 2026), or interrupted while the plan step
+    // read it: a failed message whose Try again runs it through the plan step (rerun). Nothing is called by itself on load;
+    // a saved question or plan card stays.
+    for (const r of this.records.filter((r) => r.status === "deciding" || (r.status === "picking" && !r.plan))) {
+      r.error = r.status === "deciding" ? "This message wasn't sent. Press Try again." : "This message was interrupted. Press Try again.";
+      r.status = "error";
       putRecord(r);
     }
     // A retry that finished while no tab watched it: delete what it replaced, or bring that back if it failed.
@@ -297,7 +292,7 @@ export class App {
     const href = lastDone && latest.status === "done" ? `#/c/${lastDone.id}/x` : `#/c/${latest.id}`;
     const status = thread.some((x) => x.status === "generating") ? h("span.sb-spinner", { "aria-label": "Generating" })
       : latest.status === "error" ? h("span.sb-err", { title: "Failed" }, "!")
-      : thread.some((x) => x.status === "deciding" || x.status === "asking" || (x.status === "picking" && (x.pick || x.plan))) ? h("span.sb-ask", { title: "Waiting for your answer" }) : null;
+      : thread.some((x) => x.status === "asking" || (x.status === "picking" && x.plan)) ? h("span.sb-ask", { title: "Waiting for your answer" }) : null;
     const item = h("div.sb-item", { class: active ? "is-active" : "" },
       h("a.sb-item-link", { href, title: r.title }, status, h("span.sb-item-title", null, r.title)),
       h("button.sb-item-menu", { type: "button", "aria-label": `Options for ${r.title}`, "aria-expanded": String(this.menuOpen === r.id), onclick: (e: Event) => { e.stopPropagation(); this.menuOpen = this.menuOpen === r.id ? null : r.id; this.drawSidebar(); } }, icon(ICON.dots)));
@@ -355,7 +350,6 @@ export class App {
       actions.push(h("a.tb-btn", { href: `#/c/${rec.id}` }, icon(ICON.request), "Request"));
       actions.push(h("button.tb-btn", { type: "button", onclick: () => this.doExport(rec.spec!) }, icon(ICON.download), "Export"));
       actions.push(h("button.tb-btn", { type: "button", onclick: () => this.doShare(rec.id) }, icon(LINK_ICON), "Share"));
-      if (FEEDBACK) actions.push(h("button.tb-btn", { type: "button", onclick: () => this.openFeedback(rec) }, icon(ICON.spark), "Feedback"));
     } else if (rec?.spec) {
       actions.push(h("a.tb-btn.is-primary", { href: `#/c/${rec.id}/x` }, "Open explainer", h("span", { "aria-hidden": "true" }, "→")));
     }
@@ -447,59 +441,66 @@ export class App {
 
     const body: HTMLElement[] = [];
     const base = rec.followUp ? thread.find((r) => r.id === rec.followUp!.baseId) : undefined;
-    if (rec.status === "deciding") {
-      if (this.routing.has(rec.id)) body.push(h("p.msg-text.is-muted", null, "Reading your message…"));
-      else {
-        const target = this.followUpBase(this.rootOf(rec), rec);
-        body.push(
-          h("p.msg-text", null, target ? `Should I change “${target.spec!.title}”, or make a new explainer about this?` : "Should I make a new explainer about this?"),
-          h("div.msg-choices", null,
-            target ? h("button.btn-pill", { type: "button", onclick: () => this.startFollowUp(rec, "revise") }, `✏️ Change it (version ${(target.version ?? 1) + 1})`) : null,
-            h("button.btn-pill", { type: "button", onclick: () => this.startFollowUp(rec, "new") }, "✨ New explainer about this")));
-      }
-    }
     if (rec.status === "picking" && rec.plan) body.push(...this.planView(rec));
-    else if (rec.status === "picking") {
-      const q = rec.pick?.question;
-      if (!q) body.push(h("p.msg-text.is-muted", null, PLAN_FOLLOWUPS ? "Working out what to change…" : "Finding the part of the page to change…"));
-      else {
-        body.push(h("p.msg-text", null, q.text),
-          h("div.msg-choices", null,
-            ...q.options.map((o) => h("button.btn-pill", { type: "button", onclick: () => this.answerPick(rec, { targets: o.targets, pageWide: o.pageWide }) }, o.label)),
-            h("button.btn-pill", { type: "button", onclick: () => this.cancelPick(rec) }, "Cancel")));
-      }
-    }
+    else if (rec.status === "picking") body.push(h("p.msg-text.is-muted", null, "Reading your message…"));
     if (rec.status === "asking") {
       body.push(h("p.msg-text", null, "What do you want to add to each section?"), extrasQuestion((ex) => this.answerExtras(rec, ex)));
-    } else if (EXTRAS_QUESTION && isQuality(rec.request.quality) && rec.request.quality && rec.request.extras && rec.status !== "deciding" && rec.status !== "picking") {
+    } else if (EXTRAS_QUESTION && isQuality(rec.request.quality) && rec.request.quality && rec.request.extras && rec.status !== "picking") {
       body.push(h("p.msg-choice", null, extrasSummary(rec.request.extras)));
     }
-    if (rec.followUp && rec.status !== "deciding" && !rec.answer) {
+    if (rec.followUp && !rec.answer && !(rec.status === "picking" && rec.plan?.kind === "cannot" && rec.plan.newTopic)) {
       const what = base?.spec ? `“${base.spec.title}”` : "the explainer above";
-      body.push(h("p.msg-choice", null, rec.followUp.add
-        ? `➕ Version ${rec.version ?? 2}: adding a section to ${what}`
-        : rec.followUp.kind === "revise"
-        ? `✏️ Version ${rec.version ?? 2}: revising ${what} (${modeName(rec.request.quality ?? "quality-plus") ?? "Interactive"})`
+      body.push(h("p.msg-choice", null, rec.followUp.kind === "revise"
+        ? `✏️ ${rec.version ? `Version ${rec.version}: revising ${what}` : `Revising version ${base?.version ?? 1}: ${what}`} (${modeName(rec.request.quality ?? "quality-plus") ?? "Interactive"})`
         : "✨ A new explainer that builds on this conversation"));
     }
     if (rec.replaces && rec.status === "generating") {
       const old = this.records.find((r) => r.id === rec.replaces);
       body.push(h("p.msg-choice", null, `↻ A fresh explainer, replacing “${old?.spec?.title ?? old?.title ?? "the old one"}”`));
     }
-    if (rec.status === "generating") body.push(h("p.msg-text", null, rec.replaces ? "Building a fresh explainer on the same prompt. The old one is replaced once this is ready." : isPaper ? "Reading your paper and designing an explainer. This usually takes 1–3 minutes." : rec.followUp?.add ? "Adding a section. Everything already on the page stays as it is." : rec.followUp?.kind === "revise" ? "Revising the explainer. This usually takes about a minute." : `Designing your explainer. This usually takes ${howLong(rec.request.quality) ?? "about a minute"}.`), steps);
+    // Building: the card appears at once, locked, with a progress ring; the current step is named above it and the
+    // full list of steps is folded under it (progress.ts).
+    const stepsFold = h("details.gen-steps", {
+      open: STEPS_OPEN.has(rec.id),
+      ontoggle: (e: Event) => (e.currentTarget as HTMLDetailsElement).open ? STEPS_OPEN.add(rec.id) : STEPS_OPEN.delete(rec.id),
+    }, h("summary", null, "Show steps"), steps);
+    if (rec.status === "generating") {
+      const cur = currentStep(rec);
+      body.push(
+        h("p.gen-now", { "aria-live": "polite" }, h("span.gen-dot", { "aria-hidden": "true" }),
+          h("strong", null, cur ? `${STEP_LABEL[cur[0]] ?? "Working"}…` : "Starting…"),
+          cur?.[1].detail ? h("span.step-detail", null, plain(cur[1].detail)) : null),
+        h("p.gen-hint", null, reading(rec) ? "Reading your message first: it's answered here, or built into an explainer." : rec.replaces ? "Building a fresh explainer on the same prompt. The old one is replaced once this is ready." : isPaper ? "Reading your paper and designing an explainer. This usually takes 1–3 minutes." : rec.followUp?.kind === "revise" ? "Revising the explainer. This usually takes about a minute." : `Designing your explainer. This usually takes ${howLong(rec.request.quality) ?? "about a minute"}.`),
+        lockedCard(rec), stepsFold);
+    }
     if (rec.status === "error") {
-      body.push(steps, h("div.msg-error", { role: "alert" }, h("strong", null, "Something went wrong. "), rec.error ?? ""),
+      body.push(...(Object.keys(rec.steps).length ? [lockedCard(rec, { failed: true }), stepsFold] : []),
+        h("div.msg-error", { role: "alert" }, h("strong", null, "Something went wrong. "), rec.error ?? ""),
         h("button.btn-pill", { type: "button", onclick: () => this.retryFailed(rec) }, "↻ Try again"));
     }
     if (rec.status === "done" && !rec.spec && rec.answer) {
-      body.push(h("div.msg-text.msg-answer", { html: mdToHtml(rec.answer) }), h("p.msg-choice", null, "Nothing on the page was changed. Ask for a change if you'd like one."));
+      body.push(h("div.msg-text.msg-answer", { html: mdToHtml(rec.answer) }));
+      // A follow-up's answer leaves its page as it was; the first-message step's answer (FIRST_TALK) has no page to change.
+      if (rec.followUp?.kind === "revise") body.push(h("p.msg-choice", null, "Nothing on the page was changed. Ask for a change if you'd like one."));
+      // The first-message step offered a page (a brief): one click builds it. Only under the conversation's last message.
+      if (rec.offer && thread.at(-1) === rec && !thread.some((r) => r.status !== "done" && r.status !== "error")) {
+        body.push(h("div.msg-choices", null, h("button.btn-pill", { type: "button", onclick: () => this.buildOffer(rec) }, "✨ Make an explainer about this")));
+      }
+      // Follow-ups v5: the answer lists fixes. One click says yes to all of them (sent as a picked option, so it is always
+      // read as a change; typed "fix them" could be read as a question again). Only under the conversation's last message.
+      if (rec.offersFix && thread.at(-1) === rec && !thread.some((r) => r.status !== "done" && r.status !== "error")) {
+        body.push(h("div.msg-choices", null, h("button.btn-pill", { type: "button", onclick: () => this.acceptFixes(rec) }, "✓ Yes, make these fixes")));
+      }
     }
     if (rec.status === "done" && rec.spec && rec.reverted) body.push(h("p.msg-choice", null, `↶ Back to version ${rec.reverted}: no AI call, nothing counted`));
+    if (rec.status === "done" && rec.spec && rec.madeFrom && !rec.reverted) body.push(h("p.msg-choice", null, `Made from version ${rec.madeFrom}`));
     if (rec.status === "done" && rec.spec) {
       const s = rec.spec;
+      // Follow-ups v4: the friendly reply, written from what really changed.
+      if (s.revision?.reply) body.push(h("div.msg-text.msg-answer", { html: mdToHtml(s.revision.reply) }));
       body.push(
         h("p.msg-text", null, rec.version ? `Version ${rec.version} is ready: ${s.stages.length} interactive steps. Earlier versions still open from their cards above.` : `Your explainer is ready: ${s.stages.length} interactive steps.`),
-        h("a.result-card", { href: `#/c/${rec.id}/x`, "data-theme": s.design.theme },
+        h("a.result-card", { href: `#/c/${rec.id}/x`, "data-theme": s.design.theme, class: justUnlocked(rec.id) ? "is-unlocked" : undefined },
           h("div.result-band", { class: `t-${s.design.theme}`, style: s.design.theme === "custom" && s.design.accent ? `background: ${derivePalette(s.design.accent).light.grad}` : undefined }, h("span", null, s.stages.map((st) => st.icon).join("  "))),
           h("div.result-body", null,
             h("div.result-title", null, s.title, rec.version ? h("span.result-version", null, ` v${rec.version}`) : null),
@@ -513,19 +514,19 @@ export class App {
             s.revision ? h("div.result-check", null, revisionText(s.revision)) : null,
             s.addition ? h("div.result-check", null, additionText(s)) : null,            s.factCheck ? h("div.result-check", null, s.factCheck.fixed ? `✓ Fact-checked: ${s.factCheck.fixed} correction${s.factCheck.fixed > 1 ? "s" : ""} (see below)` : "✓ Fact-checked: no issues found") : null),
           h("span.result-open", null, "Open →")));
+      // Follow-ups with a reply (v4, v5) show no change list: the reply says what changed. The steps stay in the record
+      // (one per tool call, so the same section repeated). The chips were removed Nov 19 2026: they looked noisy.
       const reports = s.revision?.steps;
-      if (reports?.length) {
+      if (reports?.length && !s.revision?.reply) {
         const mark = { done: "✓", kept: "○", undone: "↺", skipped: "–" } as const;
         body.push(h("details.msg-warn.msg-steps", null, h("summary", null, `What changed: ${reports.filter((x) => x.status === "done").length} of ${reports.length} steps done`),
           h("ul", null, ...reports.map((x) => h("li", null, `${mark[x.status]} ${plain(x.label)}${x.why ? ` (${plain(x.why)})` : ""}`)))));
       }
       if (s.warnings.length) body.push(h("details.msg-warn", null, h("summary", null, `${s.warnings.length} part(s) were fixed or skipped automatically`), h("ul", null, ...s.warnings.map((w) => h("li", null, plain(w))))));
       // Undo: under the conversation's latest version made by a follow-up, once nothing else is running.
-      if (PLAN_FOLLOWUPS && rec.followUp?.kind === "revise" && thread.at(-1) === rec && !thread.some((r) => r.status !== "done" && r.status !== "error")) {
+      if (rec.followUp?.kind === "revise" && thread.at(-1) === rec && !thread.some((r) => r.status !== "done" && r.status !== "error")) {
         body.push(h("div.msg-choices", null, h("button.btn-pill", { type: "button", onclick: () => this.undoVersion(rec) }, "↶ Undo this change")));
       }
-      // "Add section": only under the conversation's latest explainer, and only for Quality pages.
-      if (isQuality(rec.request.quality) && this.followUpBase(this.rootOf(rec)) === rec && !thread.some((r) => r.status !== "done" && r.status !== "error")) body.push(this.addSectionBox(rec));
     }
 
     return [userMsg, h("div.msg.is-assistant", null, h("div.msg-avatar", { "aria-hidden": "true" }, "✦"), h("div.msg-body", null, ...body))];
@@ -533,12 +534,11 @@ export class App {
 
   private showExplainer(rec: ExplainerRecord, stage?: string) {
     const spec = rec.spec!;
-    if (this.edit?.recId !== rec.id) {
-      this.edit = { recId: rec.id, panel: createEditPanel(this.editHost(rec)), undo: [] };
-      this.drawer = { open: false, tab: "ask" };
+    if (this.drawerRec !== rec.id) {
+      this.drawerRec = rec.id;
+      this.drawer = { open: false };
     }
-    const panel = this.edit.panel;
-    // Lite+ pages have no Ask chatbot; the drawer then holds only Edit chat.
+    // Reader pages have no Ask chatbot, so no drawer.
     const chatEl = spec.noAsk ? undefined : createChat({
       spec,
       messages: rec.chat,
@@ -552,8 +552,6 @@ export class App {
       href: (sid) => (sid ? `#/c/${rec.id}/x/${encodeURIComponent(sid)}` : `#/c/${rec.id}/x`),
       onProgress: (p) => { rec.progress = p; putRecord(rec); },
       chat: chatEl,
-      // Edit chat is hidden for now (planned for version 2); set EDIT_CHAT to true to bring it back.
-      ...(EDIT_CHAT ? { edit: panel.el, editing: panel.target() ?? undefined, onEditBlock: (s: number, b: number) => this.openEdit(s, b) } : {}),
       onSectionTool: (i, _kind, button) => this.openSearch(rec, i, button),
       loadFormulaNote: async (i, b, signal) => {
         const st = spec.stages[i];
@@ -597,76 +595,40 @@ export class App {
     });
   }
 
-  // ---------- Edit chat ----------
-
-  private openEdit(stage: number, block: number) {
-    this.edit?.panel.open({ stage, block });
-    this.view.querySelector(".explainer")?.dispatchEvent(new CustomEvent("x-drawer", { detail: { open: true, tab: "edit" } }));
-  }
-
-  /** Re-render the open explainer after an edit, keeping the scroll position and the drawer. */
-  private rerender(rec: ExplainerRecord) {
-    const top = this.view.scrollTop;
-    this.disposeView?.();
-    this.showExplainer(rec, this.parts()[3]);
-    this.view.scrollTop = top;
-  }
-
-  /** Swap in a new spec: keep slider positions, reset saved answers that no longer line up, save. */
-  private setSpec(rec: ExplainerRecord, next: ExplainerSpec, resetStages: string[]) {
-    inheritState(rec.spec!, next);
-    if (resetStages.length) {
-      const answers = Object.fromEntries(Object.entries(rec.progress.answers).filter(([k]) => !resetStages.some((id) => k.startsWith(`${id}:`))));
-      rec.progress = { ...rec.progress, answers };
-    }
-    rec.spec = next;
-    rec.updatedAt = Date.now();
-    putRecord(rec);
-    this.rerender(rec);
-  }
-
-  private editHost(rec: ExplainerRecord) {
-    const undo = () => this.edit?.recId === rec.id ? this.edit.undo : [];
-    const highlight = (t: EditTarget | null) => {
-      this.view.querySelectorAll(".x-block.is-editing").forEach((e) => e.classList.remove("is-editing"));
-      if (t) this.view.querySelector(`[data-edit="${t.stage}:${t.block}"]`)?.classList.add("is-editing");
-    };
-    return {
-      spec: () => rec.spec!,
-      apply: (next: ExplainerSpec, focus: EditTarget | null, structural: boolean) => {
-        const prev = rec.spec!;
-        undo().push(prev);
-        rec.originalSpec ??= prev;
-        // Only the edited stage is a new object (checkEdit keeps the others as they were).
-        const changed = next.stages.filter((s, i) => s !== prev.stages[i]).map((s) => s.id);
-        this.setSpec(rec, next, structural ? changed : []);
-        highlight(focus);
-      },
-      undo: () => {
-        const prev = undo().pop();
-        if (!prev) return false;
-        this.setSpec(rec, prev, prev.stages.map((s) => s.id).filter((id, i) => prev.stages[i] !== rec.spec!.stages[i]));
-        return true;
-      },
-      canUndo: () => undo().length > 0,
-      restoreOriginal: () => {
-        if (!rec.originalSpec) return false;
-        undo().push(rec.spec!);
-        const original = rec.originalSpec;
-        rec.originalSpec = undefined;
-        this.setSpec(rec, original, original.stages.map((s) => s.id));
-        return true;
-      },
-      hasOriginal: () => !!rec.originalSpec,
-      value: (name: string) => storeFor(rec.spec!)?.get(name) ?? NaN,
-      highlight,
-    };
-  }
-
   // ---------- generation ----------
 
   /** root: the conversation this message continues (absent = the home box: a new conversation). */
-  private async submit(s: ComposerSubmit, root?: string) {
+  /** "✓ Yes, make these fixes" under a v5 answer that listed fixes: the next message, sent as a picked option, so the plan
+   * step reads it as a change without asking Jev, and the agent gets the answer's fix list as the turn before. */
+  private acceptFixes(rec: ExplainerRecord) {
+    const choices = this.dock?.composer.choices?.();
+    if (!choices) return;
+    const text = "Yes, make the fixes you listed.";
+    this.submit({ text, ...choices }, this.rootOf(rec), { label: text, sections: [], steps: [] });
+  }
+
+  /** "✨ Make an explainer about this" under a first-message answer (FIRST_TALK): builds the offered brief at once (direct:
+   * no first-message step), with the composer's current mode and options; a paper conversation keeps its paper. */
+  private async buildOffer(old: ExplainerRecord) {
+    const offer = old.offer;
+    if (!offer) return;
+    const { history: _h, direct: _d, avoid: _a, ...r } = old.request;
+    const { request, ask } = this.withCurrentOptions(withPromptText(r as GenerateRequest, offer));
+    const now = Date.now();
+    const rec: ExplainerRecord = {
+      id: uid(), title: clip(offer), createdAt: now, updatedAt: now,
+      prompt: { text: offer, ...(request.mode === "paper" ? { fileName: old.prompt.fileName, pages: old.prompt.pages } : {}) },
+      request: { ...request, direct: true }, status: ask ? "asking" : "generating", steps: {}, progress: { visited: [], answers: {} }, chat: [],
+      thread: this.rootOf(old), ...(old.followUp?.kind === "new" ? { followUp: old.followUp } : {}),
+    };
+    this.records.unshift(rec);
+    await putRecord(rec);
+    location.hash = `#/c/${rec.id}`;
+    if (!ask) this.run(rec);
+  }
+
+  /** option: the message is a picked option (acceptFixes), passed on to the plan step. */
+  private async submit(s: ComposerSubmit, root?: string, option?: PlanOption) {
     let request: GenerateRequest;
     let title: string;
     if (s.paper) {
@@ -679,31 +641,52 @@ export class App {
     if (!EXTRAS_QUESTION && isQuality(s.quality) && s.quality) request = { ...request, extras: [] };
     // A follow-up continues from the conversation's latest finished explainer.
     const base = root ? this.followUpBase(root) : undefined;
+    // A conversation with no page yet (only answers so far): a typed message keeps talking about the paper uploaded earlier.
+    const paper = root && !base && !s.paper ? this.threadOf(root).filter((r) => r.request.mode === "paper").at(-1)?.request : undefined;
+    if (paper?.mode === "paper") request = { mode: "paper", title: paper.title, note: s.text, sections: paper.sections, ...optionsOf(s), ...(request.extras ? { extras: request.extras } : {}) };
     const now = Date.now();
     const rec: ExplainerRecord = {
       id: uid(), title, createdAt: now, updatedAt: now,
       prompt: { text: s.text, fileName: s.paper?.fileName, pages: s.paper?.pages },
-      request, status: base ? "deciding" : isQuality(s.quality) && s.quality && !request.extras ? "asking" : "generating", steps: {}, progress: { visited: [], answers: {} }, chat: [],
+      request, status: base ? "picking" : isQuality(s.quality) && s.quality && !request.extras ? "asking" : "generating", steps: {}, progress: { visited: [], answers: {} }, chat: [],
       ...(root ? { thread: root } : {}),
     };
     this.records.unshift(rec);
+    // No page yet: the first-message step (FIRST_TALK) reads the conversation so far, so "ok, make it" builds what was discussed.
+    if (root && !base) {
+      const history = this.historyOf(rec);
+      if (history.length) rec.request = { ...rec.request, history };
+    }
     await putRecord(rec);
     location.hash = `#/c/${rec.id}`;
     if (!base) { if (rec.status === "generating") this.run(rec); return; }
-    // A new paper can only be a new explainer; anything else: revise the one above, or a new one?
-    if (s.paper) { this.startFollowUp(rec, "new"); return; }
-    this.routing.add(rec.id);
-    this.refresh(rec.id);
-    let kind: RouteResponse["kind"] = "unclear";
-    try {
-      kind = (await routeFollowUp({ text: s.text, title: base.spec!.title, stages: base.spec!.stages.map((st) => st.label) })).kind;
-    } catch (e) {
-      console.warn("follow-up routing failed; asking the reader", e);
-    }
-    this.routing.delete(rec.id);
-    if (rec.status !== "deciding") return; // the reader already chose
-    if (kind === "unclear") this.refresh(rec.id);
-    else this.startFollowUp(rec, kind);
+    this.beginFollowUp(rec, base, option);
+  }
+
+  /**
+   * A message under a finished explainer (`base`). There is no router any more (removed Nov 13 2026): the plan step
+   * (/api/followup/plan) reads every typed follow-up and answers, asks, refuses, undoes, changes, or says it is a new topic
+   * (then the reader gets a "New explainer about this" button, newFromPick). A new paper, or a page made with a retired
+   * mode (it can't be changed), can only be a new explainer.
+   */
+  private beginFollowUp(rec: ExplainerRecord, base: ExplainerRecord, option?: PlanOption) {
+    const changeable = !!base.request.quality && PLAN_MODES.includes(base.request.quality);
+    this.startFollowUp(rec, rec.request.mode === "paper" || !changeable ? "new" : "revise", option);
+  }
+
+  /** "✨ New explainer about this" under a reply that said the message is about a different topic: a new explainer that
+   * builds on the conversation, made with the composer's current mode and options (not the page's, which the plan step used). */
+  private newFromPick(rec: ExplainerRecord) {
+    if (rec.status !== "picking") return;
+    const { followUp: _f, ...r } = rec.request;
+    // The reader chose to build (direct: no first-message step); with v5's brief, the brief is what to build.
+    const brief = rec.plan?.kind === "cannot" ? rec.plan.brief : undefined;
+    rec.followUp = undefined;
+    rec.version = undefined;
+    const request = this.withCurrentOptions(r).request;
+    rec.request = { ...(brief ? withPromptText(request, brief) : request), direct: true };
+    rec.plan = undefined;
+    this.startFollowUp(rec, "new");
   }
 
   // ---------- conversations (threads of records) ----------
@@ -728,8 +711,9 @@ export class App {
     return this.threadOf(root).filter((r) => r.status === "done" && r.spec && r !== before && (!before || r.createdAt < before.createdAt)).at(-1);
   }
 
-  /** Start a follow-up as a new version of the explainer above, or as a related new explainer. */
-  private startFollowUp(rec: ExplainerRecord, kind: "revise" | "new") {
+  /** Start a follow-up as a new version of the explainer above, or as a related new explainer. option: a picked option
+   * sent with a revise's plan step (acceptFixes). */
+  private startFollowUp(rec: ExplainerRecord, kind: "revise" | "new", option?: PlanOption) {
     const root = this.rootOf(rec);
     const base = this.followUpBase(root, rec);
     if (base?.spec) {
@@ -743,19 +727,17 @@ export class App {
       if (f) {
         rec.request = { ...rec.request, followUp: f };
         rec.followUp = { kind, baseId: base.id };
-        if (kind === "revise") rec.version = (base.version ?? 1) + 1;
+        rec.version = undefined; // the server numbers the version when it's saved (done event)
       }
       // A revision keeps the answer the explainer above was made with; a new Quality explainer asks again.
       if (kind === "revise" && base.request.extras) rec.request = { ...rec.request, extras: base.request.extras };
-      // A revision is made in the page's own mode (with its review rounds and Thinking), not the one picked in the box now:
+      // A revision is made in the page's own mode (with its Thinking), not the one picked in the box now:
       // a Playground page revised with Quick read selected would otherwise lose its playgrounds.
       if (kind === "revise") {
         const r: GenerateRequest = { ...rec.request };
         const b = base.request;
-        delete r.reviewRounds;
         delete r.planThinking;
         r.quality = b.quality;
-        if (b.reviewRounds) r.reviewRounds = b.reviewRounds;
         if (b.planThinking !== undefined) r.planThinking = b.planThinking;
         rec.request = r;
       }
@@ -768,8 +750,8 @@ export class App {
       return;
     }
     const f = rec.request.followUp;
-    if (kind === "revise" && f?.kind === "revise" && !f.pick && !f.plan && rec.request.quality && PICK_MODES.includes(rec.request.quality)) {
-      this.matchFirst(rec);
+    if (kind === "revise" && f?.kind === "revise" && !f.plan && rec.request.quality && PLAN_MODES.includes(rec.request.quality)) {
+      this.matchFirst(rec, option);
       return;
     }
     rec.status = "generating";
@@ -779,141 +761,9 @@ export class App {
     this.run(rec);
   }
 
-  /**
-   * The "➕ Add section" button under an explainer, opening a small box for what to add. Kept across re-renders
-   * (like the dock), so typed text survives progress updates.
-   */
-  private addSectionBox(base: ExplainerRecord): HTMLElement {
-    if (this.addBox?.recId === base.id) return this.addBox.el;
-    const input = h("textarea.add-input", { rows: 2, maxlength: LIMITS.conceptChars, placeholder: "What should the new section explain? e.g. “Also explain continuous distributions”" }) as HTMLTextAreaElement;
-    const go = h("button.btn-pill.is-primary", { type: "button" }, "Add section") as HTMLButtonElement;
-    const form = h("div.add-form", { hidden: true }, input,
-      h("p.dock-note", null, "We'll place it where it fits best; everything already on the page stays exactly as it is."),
-      h("div.msg-choices", null, go, h("button.btn-pill", { type: "button", onclick: () => { form.hidden = true; open.hidden = false; } }, "Cancel")));
-    const open = h("button.btn-pill", { type: "button", onclick: () => { form.hidden = false; open.hidden = true; input.focus(); } }, icon(ICON.plus), "Add section") as HTMLButtonElement;
-    const send = () => {
-      const text = input.value.trim();
-      if (!text) { input.focus(); return; }
-      this.addBox = undefined;
-      this.addSection(base, text);
-    };
-    go.addEventListener("click", send);
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
-    const el = h("div.add-section", null, open, form);
-    this.addBox = { recId: base.id, el };
-    return el;
-  }
-
-  /** A new version of `base` with one section added: no routing, no extras question (the base's answer is reused). */
-  private async addSection(base: ExplainerRecord, text: string) {
-    const f = buildFollowUp("revise", base.spec!, []);
-    if (!f || f.kind !== "revise") { toast("That explainer is too large to add to. Start a new conversation instead."); return; }
-    const b = base.request;
-    const now = Date.now();
-    const rec: ExplainerRecord = {
-      id: uid(), title: text.length > 60 ? text.slice(0, 57) + "…" : text, createdAt: now, updatedAt: now,
-      prompt: { text },
-      request: { mode: "concept", text, quality: "quality-plus", effort: b.effort, interactivity: b.interactivity, ...(b.extras ? { extras: b.extras } : {}), followUp: { ...f, add: true } },
-      status: "generating", steps: {}, progress: { visited: [], answers: {} }, chat: [],
-      thread: this.rootOf(base), followUp: { kind: "revise", baseId: base.id, add: true }, version: (base.version ?? 1) + 1,
-    };
-    this.records.unshift(rec);
-    await putRecord(rec);
-    location.hash = `#/c/${rec.id}`;
-    this.run(rec);
-  }
-
-  /** The Feedback dialog (feedback.ts): the server reads the page from the same revise follow-up the change will run with. */
-  private openFeedback(base: ExplainerRecord) {
-    const f = base.spec ? buildFollowUp("revise", base.spec, []) : null;
-    if (!f || f.kind !== "revise") { toast("That explainer is too large to change from feedback. Start a new conversation instead."); return; }
-    // The change the feedback that made this version asked for (none for a first version or an ordinary follow-up).
-    const prev = base.request.followUp?.kind === "revise" ? base.request.followUp.feedback : undefined;
-    const lastChange = prev && prev.targets.length
-      ? { stages: prev.targets.map((t) => t.stage).filter(Boolean), what: prev.targets.map((t) => t.what).join("; ").slice(0, 400) }
-      : undefined;
-    openFeedbackDialog({ recordId: base.id, spec: base.spec!, quality: base.request.quality, followUp: f, ...(lastChange && lastChange.stages.length ? { lastChange } : {}) },
-      (r, text) => this.onFeedback(base, f, r, text));
-  }
-
-  /** What the reader confirmed: say what was saved, and run the confirmed change (if any) as a new version. */
-  private onFeedback(base: ExplainerRecord, f: Extract<FollowUp, { kind: "revise" }>, r: FeedbackConfirmed, text: string) {
-    const saved = r.preference ? `Saved for your future pages: “${r.preference.text}”` : "";
-    if (r.feedback && base.spec) {
-      toast(saved ? `${saved} Updating this page…` : "Updating this page…");
-      this.feedbackFollowUp(base, { ...f, feedback: r.feedback }, text);
-    } else {
-      toast(saved || "Thanks for the feedback.");
-    }
-  }
-
-  /**
-   * Feedback's confirmed change to `base`, as a revise follow-up carrying FollowUp.feedback: a new version in the same
-   * conversation, made with the same options as `base`. Only the confirmed parts change (server/explainer/pipeline.py).
-   */
-  private async feedbackFollowUp(base: ExplainerRecord, f: FollowUp, text: string) {
-    const b = base.request;
-    const now = Date.now();
-    const title = `Feedback: ${text}`;
-    const rec: ExplainerRecord = {
-      id: uid(), title: title.length > 60 ? title.slice(0, 57) + "…" : title, createdAt: now, updatedAt: now,
-      prompt: { text },
-      request: {
-        mode: "concept", text, quality: b.quality, effort: b.effort, interactivity: b.interactivity, level: b.level,
-        ...(b.planThinking !== undefined ? { planThinking: b.planThinking } : {}), ...(b.colorMode ? { colorMode: b.colorMode } : {}),
-        ...(b.extras ? { extras: b.extras } : {}), followUp: f,
-      },
-      status: "generating", steps: {}, progress: { visited: [], answers: {} }, chat: [],
-      thread: this.rootOf(base), followUp: { kind: "revise", baseId: base.id }, version: (base.version ?? 1) + 1,
-    };
-    this.records.unshift(rec);
-    await putRecord(rec);
-    location.hash = `#/c/${rec.id}`;
-    this.run(rec);
-  }
-
-  /**
-   * A revise follow-up on a Playground or Quick read page: match the request to the page's sections first
-   * (server/explainer/followup_pick.py). Sure -> build with those parts; unclear -> ask the reader (rec.pick); can't
-   * tell -> an error, nothing built. If the call itself fails, the page is built anyway and the server's finder decides.
-   */
-  private async pickFirst(rec: ExplainerRecord) {
-    const f = rec.request.followUp;
-    if (f?.kind !== "revise" || !rec.request.quality) return;
-    rec.status = "picking";
-    rec.pick = undefined;
-    rec.updatedAt = Date.now();
-    putRecord(rec);
-    this.refresh(rec.id);
-    let r: Awaited<ReturnType<typeof pickFollowUp>> | null = null;
-    try {
-      r = await pickFollowUp({ text: rec.prompt.text, quality: rec.request.quality, followUp: f });
-    } catch (e) {
-      console.warn("follow-up pick failed; the server's finder decides", e);
-    }
-    if (rec.status !== "picking") return; // cancelled meanwhile
-    if (r && "question" in r) {
-      rec.pick = { question: r.question };
-      rec.updatedAt = Date.now();
-      putRecord(rec);
-      this.refresh(rec.id);
-      return;
-    }
-    if (r && "error" in r) {
-      rec.status = "error";
-      rec.error = r.error;
-      rec.updatedAt = Date.now();
-      putRecord(rec);
-      this.refresh(rec.id);
-      return;
-    }
-    this.answerPick(rec, r ? { targets: r.targets, pageWide: r.pageWide } : null);
-  }
-
-  /** A revise follow-up on a Playground or Quick read page: the plan first (follow-ups v2), else the section pick. */
-  private matchFirst(rec: ExplainerRecord) {
-    if (PLAN_FOLLOWUPS) this.planFirst(rec);
-    else this.pickFirst(rec);
+  /** A revise follow-up on a Reader or Explorer page: what it asks first (follow-ups v3, /api/followup/plan). */
+  private matchFirst(rec: ExplainerRecord, option?: PlanOption) {
+    this.planFirst(rec, option);
   }
 
   /**
@@ -926,7 +776,6 @@ export class App {
     const f = rec.request.followUp;
     if (f?.kind !== "revise" || !rec.request.quality) return;
     rec.status = "picking";
-    rec.pick = undefined;
     rec.plan = undefined;
     rec.updatedAt = Date.now();
     putRecord(rec);
@@ -934,7 +783,7 @@ export class App {
     let r: PlanResponse | null = null;
     try {
       const history = this.historyOf(rec);
-      r = await planFollowUp({ text: rec.prompt.text, quality: rec.request.quality, followUp: f, ...(option ? { option } : {}), ...(extra ? { extra } : {}), ...(history.length ? { history } : {}) });
+      r = await planFollowUp({ text: rec.prompt.text, quality: rec.request.quality, followUp: f, ...(option ? { option } : {}), ...(extra ? { extra } : {}), ...(history.length ? { history } : {}), ...(rec.followUp?.baseId ? { baseId: rec.followUp.baseId } : {}) });
     } catch (e) {
       // No silent fallback to the old section pick: the reader sees why, and "Try again" asks again (retry → matchFirst).
       if (rec.status !== "picking") return; // cancelled meanwhile
@@ -942,19 +791,17 @@ export class App {
       return;
     }
     if (rec.status !== "picking") return; // cancelled meanwhile
-    // Legacy: only when the server has v3 turned off (FOLLOWUP_PLAN=0) does the old section pick decide.
-    if (!r || ("kind" in r && r.kind === "off")) { this.pickFirst(rec); return; }
     if ("error" in r) { this.failFollowUp(rec, r.error); return; }
-    if (r.kind === "revert") { this.revert(rec); return; }
+    if (r.kind === "revert") { this.revert(rec, r.to); return; }
     if (r.kind === "answer") {
       rec.status = "done";
       rec.answer = r.answer;
     } else if (r.kind === "ask") {
       rec.plan = { kind: "ask", question: r.question };
     } else if (r.kind === "cannot") {
-      rec.plan = { kind: "cannot", reason: r.reason, alternative: r.alternative };
+      rec.plan = { kind: "cannot", reason: r.reason, alternative: r.alternative, ...(r.newTopic ? { newTopic: true } : {}) };
     } else if (r.kind === "change") {
-      const plan: FollowUpPlan = { sections: r.sections, steps: r.steps };
+      const plan: FollowUpPlan = { sections: r.sections, steps: r.steps, ...(r.v4 ? { v4: r.v4 } : {}), ...(r.v5 ? { v5: r.v5 } : {}) };
       if (!r.confirm) { this.runSteps(rec, plan); return; }
       rec.plan = { kind: "confirm", plan, summary: r.summary };
     }
@@ -990,8 +837,10 @@ export class App {
     }
     if (p.kind === "cannot") {
       const alt = p.alternative;
+      // A different topic: offer a new explainer (a click, so a wrong guess never spends one of the day's explainers).
+      const fresh = p.newTopic ? h("button.btn-pill", { type: "button", onclick: () => this.newFromPick(rec) }, "✨ New explainer about this") : null;
       return [h("p.msg-text", null, p.reason),
-        h("div.msg-choices", null, alt ? h("button.btn-pill", { type: "button", onclick: () => this.planFirst(rec, alt) }, alt.label) : null, cancel)];
+        h("div.msg-choices", null, fresh, alt ? h("button.btn-pill", { type: "button", onclick: () => this.planFirst(rec, alt) }, alt.label) : null, cancel)];
     }
     // A question: each option runs as it is; with words in "Add detail", the chosen option is planned again with them.
     const detail = h("input.plan-detail", { type: "text", placeholder: "Add detail to your choice (optional)", maxlength: "300", "aria-label": "Add detail to your choice" });
@@ -1014,16 +863,23 @@ export class App {
     this.run(rec);
   }
 
-  /** The conversation's earlier prompts with what each did, oldest first (the last 5), for /api/followup/plan. */
+  /**
+   * The conversation's earlier prompts with what each did, oldest first (the last HISTORY_TURNS), for /api/followup/plan.
+   * Sent in full (Nov 13 2026): the prompt, a whole answer, a change's whole reply plus every step (kept or undone, with why).
+   * Cutting answers to 240 characters lost what "fix that" pointed at. The server trims older turns and caps the total.
+   */
   private historyOf(rec: ExplainerRecord): string[] {
     const earlier = this.threadOf(this.rootOf(rec)).filter((r) => r.id !== rec.id && r.createdAt < rec.createdAt);
-    return earlier.slice(-5).map((r) => {
-      const what = r.answer ? "answered in the chat, nothing changed"
+    return earlier.slice(-HISTORY_TURNS).map((r) => {
+      const rev = r.status === "done" ? r.spec?.revision : undefined;
+      const steps = (rev?.steps ?? []).map((x) => `${x.label} (${x.status}${x.why ? `: ${x.why}` : ""})`).join("; ");
+      const what = r.answer ? `answered in the chat, nothing changed: "${r.answer.replace(/\s+/g, " ").trim()}"${r.offer ? ` Offered an explainer: "${r.offer}"` : ""}`
         : r.status === "error" ? "failed, nothing changed"
         : r.reverted ? `undone: back to version ${r.reverted}`
-        : r.status === "done" && r.spec ? (r.spec.revision ? `made version ${r.version ?? 1}: ${(r.spec.revision.steps ?? []).filter((x) => x.status === "done").map((x) => x.label).join("; ") || revisionText(r.spec.revision)}` : `made version ${r.version ?? 1}`)
+        : rev ? `made version ${r.version ?? 1}. Reply: "${(rev.reply ?? revisionText(rev)).replace(/\s+/g, " ").trim()}"${steps ? ` Steps: ${steps}` : ""}`
+        : r.status === "done" && r.spec ? `made version ${r.version ?? 1}`
         : "not finished";
-      return `"${r.prompt.text.slice(0, 160)}": ${what}`.slice(0, 300);
+      return `"${r.prompt.text}": ${what}`;
     });
   }
 
@@ -1036,16 +892,23 @@ export class App {
     this.refresh(rec.id);
   }
 
-  /** "Undo": this record becomes a copy of the version before the one it follows. No AI call, not counted. */
-  private revert(rec: ExplainerRecord) {
-    const base = rec.followUp ? this.records.find((r) => r.id === rec.followUp!.baseId) : undefined;
-    const prevId = base?.followUp?.kind === "revise" ? base.followUp.baseId : undefined;
-    const prev = prevId ? this.records.find((r) => r.id === prevId) : undefined;
-    if (!prev?.spec) { this.failFollowUp(rec, "There's no earlier version of this page to go back to."); return; }
-    const { revision: _revision, addition: _addition, ...spec } = structuredClone(prev.spec);
-    rec.spec = { ...spec, warnings: [] };
-    rec.reverted = prev.version ?? 1;
-    rec.title = spec.title;
+  /** "Undo": this record becomes a copy of the version before the one it follows, saved by the server as a new
+   *  version (versions.py). No AI call, not counted. */
+  private async revert(rec: ExplainerRecord, to?: number) {
+    const baseId = rec.followUp?.baseId;
+    if (!baseId) { this.failFollowUp(rec, "There's no earlier version of this page to go back to."); return; }
+    let r: Awaited<ReturnType<typeof revertVersion>>;
+    try {
+      await flushRecord(baseId).catch(() => undefined);
+      r = await revertVersion(rec.id, baseId, to);
+    } catch (e) {
+      this.failFollowUp(rec, e instanceof Error ? e.message : "There's no earlier version of this page to go back to.");
+      return;
+    }
+    rec.spec = r.spec;
+    rec.version = r.version;
+    rec.reverted = r.reverted;
+    rec.title = r.spec.title;
     rec.plan = undefined;
     rec.steps = {};
     rec.status = "done";
@@ -1064,29 +927,15 @@ export class App {
       id: uid(), title: text, createdAt: now, updatedAt: now, prompt: { text },
       request: { ...latest.request, mode: "concept", text, followUp: f } as GenerateRequest,
       status: "picking", steps: {}, progress: { visited: [], answers: {} }, chat: [],
-      thread: this.rootOf(latest), followUp: { kind: "revise", baseId: latest.id }, version: (latest.version ?? 1) + 1,
+      thread: this.rootOf(latest), followUp: { kind: "revise", baseId: latest.id },
     };
     this.records.unshift(rec);
     this.revert(rec);
     location.hash = `#/c/${rec.id}`;
   }
 
-  /** Build the revision with the parts picked (or chosen by the reader); null = let the server's finder decide. */
-  private answerPick(rec: ExplainerRecord, pick: FollowUpPick | null) {
-    const f = rec.request.followUp;
-    if (rec.status !== "picking" || f?.kind !== "revise") return;
-    if (pick) rec.request = { ...rec.request, followUp: { ...f, pick } };
-    rec.pick = undefined;
-    rec.status = "generating";
-    rec.updatedAt = Date.now();
-    putRecord(rec);
-    this.refresh(rec.id);
-    this.run(rec);
-  }
-
   private cancelPick(rec: ExplainerRecord) {
     if (rec.status !== "picking") return;
-    rec.pick = undefined;
     rec.plan = undefined;
     rec.status = "error";
     rec.error = "Cancelled: nothing on the page was changed. Type what you'd like to change, or press Try again.";
@@ -1206,6 +1055,16 @@ export class App {
 
   /** A failed message with its new request: asks what to add to each section first if the mode needs it, else runs again. */
   private rerun(rec: ExplainerRecord, ask: boolean) {
+    // A message under an explainer that never got its follow-up started (an old router's "deciding" one): through the plan
+    // step now, like a newly sent follow-up.
+    const base = rec.thread && !rec.followUp ? this.followUpBase(this.rootOf(rec), rec) : undefined;
+    if (base) {
+      rec.error = undefined;
+      rec.steps = {};
+      rec.status = "picking";
+      this.beginFollowUp(rec, base);
+      return;
+    }
     if (ask) { // the mode changed to one that asks what to add to each section, like a new prompt
       rec.status = "asking";
       rec.error = undefined;
@@ -1234,7 +1093,7 @@ export class App {
   private withCurrentOptions(req: GenerateRequest): { request: GenerateRequest; ask: boolean } {
     const choices = this.dock?.composer.choices?.();
     if (!choices || req.followUp?.kind === "revise") return { request: req, ask: false };
-    const { quality, reviewRounds: _r, effort: _e, interactivity: _i, level: _l, planThinking: _t, colorMode: _c, extras, ...rest } = req;
+    const { quality, effort: _e, interactivity: _i, level: _l, planThinking: _t, colorMode: _c, extras, ...rest } = req;
     const opts = optionsOf(choices);
     const keep = !!extras && quality === opts.quality;
     const none = !keep && !EXTRAS_QUESTION && isQuality(opts.quality); // question hidden (v1): no extras
@@ -1250,16 +1109,15 @@ export class App {
   private async retryFresh(old: ExplainerRecord, text?: string) {
     if (!old.spec || this.replacerOf(old)) return;
     const { avoid: _old, ...b } = old.request; // also drops an `avoid` saved by an earlier version of Retry
-    let request: GenerateRequest = { ...b };
-    // A version made from Feedback is redone as an ordinary revision of the same request (its confirmed run was used up).
-    if (request.followUp?.kind === "revise" && request.followUp.feedback) {
-      const { feedback: _used, ...f } = request.followUp;
-      request.followUp = f;
-    }
     // An edited prompt also gets the new text; a revise follow-up's section pick is then dropped, as it was made for the
     // old text, so the server's finder decides again. A plain Retry keeps the prompt (and a revise follow-up's plan).
-    let ask = false;
-    ({ request, ask } = text !== undefined ? this.editedRequest(request, text) : this.withCurrentOptions(request));
+    let { request, ask } = text !== undefined ? this.editedRequest(b, text) : this.withCurrentOptions(b);
+    if (text === undefined && request.followUp?.kind !== "revise") {
+      // A plain Retry of a page builds again without the first-message step (FIRST_TALK), from the brief the page was built
+      // from (the step's `detail`), not from words like "ok, make it". An edited prompt is read again, like a new one.
+      const brief = old.steps.intake?.detail;
+      request = { ...(brief ? withPromptText(request, brief) : request), direct: true };
+    }
     const now = Date.now();
     const rec: ExplainerRecord = {
       id: uid(), title: text !== undefined && !old.thread && request.mode === "concept" ? clip(text) : old.title, createdAt: now, updatedAt: now,
@@ -1268,7 +1126,6 @@ export class App {
       ...(old.thread ? { thread: old.thread } : {}), ...(old.followUp ? { followUp: old.followUp } : {}), ...(old.version ? { version: old.version } : {}),
       replaces: old.id,
     };
-    if (this.addBox?.recId === old.id) this.addBox = undefined;
     this.records.unshift(rec);
     await putRecord(rec);
     location.hash = `#/c/${rec.id}`;
@@ -1279,6 +1136,15 @@ export class App {
   private async settleRetry(rec: ExplainerRecord) {
     const oldId = rec.replaces;
     if (!oldId || (rec.status !== "done" && rec.status !== "error")) return; // still building, or waiting on a question
+    if (rec.status === "done" && !rec.spec) {
+      // An edited prompt that was answered, not built (FIRST_TALK): nothing replaces the page, so it comes back and the
+      // answer stays after it.
+      delete rec.replaces;
+      rec.updatedAt = Date.now();
+      putRecord(rec);
+      this.refresh(rec.id);
+      return;
+    }
     if (rec.status === "done") {
       try {
         await deleteRecord(oldId);
@@ -1304,7 +1170,7 @@ export class App {
 
   private retry(rec: ExplainerRecord) {
     const f = rec.request.followUp;
-    if (f?.kind === "revise" && !f.pick && !f.plan && !f.feedback && !f.add && rec.request.quality && PICK_MODES.includes(rec.request.quality)) {
+    if (f?.kind === "revise" && !f.plan && rec.request.quality && PLAN_MODES.includes(rec.request.quality)) {
       rec.error = undefined;
       rec.steps = {};
       this.matchFirst(rec); // match the request to the page again (it may ask the reader)
@@ -1326,12 +1192,42 @@ export class App {
       // The server saves this generation into the record, so the record must be on the server first.
       await flushRecord(rec.id).catch(() => undefined);
       await generateExplainer(rec.request, (e) => {
-        if (e.type === "step") rec.steps[e.step] = { status: e.status, detail: e.detail };
+        if (e.type === "step") {
+          // at: when the step started, for the progress ring (the server stores its own; this keeps a live tab's).
+          const old = rec.steps[e.step];
+          rec.steps[e.step] = { status: e.status, detail: e.detail, at: old?.at ?? Date.now(), preview: e.preview ?? old?.preview };
+        }
         else if (e.type === "done") {
           rec.spec = e.spec;
           rec.usage = e.usage;
+          if (e.version && e.version > 1) rec.version = e.version; // a page's first version shows no number
+          if (e.madeFrom) rec.madeFrom = e.madeFrom;
           rec.status = "done";
           rec.title = e.spec.title;
+        } else if (e.type === "error" && e.message.startsWith(ASKED_PREFIX) && askedOf(e.message)) {
+          // Follow-ups v4: the editor asks the reader before changing anything. Shown like the plan step's question.
+          rec.status = "picking";
+          rec.plan = { kind: "ask", question: askedOf(e.message)! };
+        } else if (e.type === "error" && jsonAfter(e.message, ANSWER_PREFIX)) {
+          // The first-message step (FIRST_TALK) answered: a reply, no page, not counted; offer: a brief to build with one click.
+          const a = jsonAfter(e.message, ANSWER_PREFIX)!;
+          rec.status = "done";
+          rec.answer = a.reply;
+          if (typeof a.offer === "string" && a.offer) rec.offer = a.offer;
+        } else if (e.type === "error" && jsonAfter(e.message, NEW_TOPIC_BRIEF_PREFIX)) {
+          // Follow-ups v5's new topic with a brief: the button builds from the brief.
+          const a = jsonAfter(e.message, NEW_TOPIC_BRIEF_PREFIX)!;
+          rec.status = "picking";
+          rec.plan = { kind: "cannot", reason: a.reply, alternative: null, newTopic: true, ...(typeof a.brief === "string" && a.brief ? { brief: a.brief } : {}) };
+        } else if (e.type === "error" && e.message.startsWith(NEW_TOPIC_PREFIX)) {
+          // Follow-ups v5: the agent found a different topic. Shown like the plan step's new-topic reply (a button, never automatic).
+          rec.status = "picking";
+          rec.plan = { kind: "cannot", reason: e.message.slice(NEW_TOPIC_PREFIX.length), alternative: null, newTopic: true };
+        } else if (e.type === "error" && e.message.startsWith(OFFER_PREFIX)) {
+          // Follow-ups v5: an answer that lists fixes, shown with a "Yes, make these fixes" button.
+          rec.status = "done";
+          rec.answer = e.message.slice(OFFER_PREFIX.length);
+          rec.offersFix = true;
         } else if (e.type === "error" && e.message.startsWith(CHECKED_PREFIX)) {
           // Follow-ups v3: the sections were checked and found right. A reply, not an error or a new version.
           rec.status = "done";
@@ -1344,7 +1240,7 @@ export class App {
         // Progress stays local (the server records it itself); the result is saved to the account.
         putRecord(rec, { remote: e.type !== "step" });
         this.refresh(rec.id);
-      }, ctrl.signal, rec.id);
+      }, ctrl.signal, rec.id, { baseId: rec.followUp?.kind === "revise" ? rec.followUp.baseId : undefined, replaces: rec.replaces });
       this.running.delete(rec.id);
       if (rec.replaces) await this.settleRetry(rec);
     } catch (e) {
@@ -1410,17 +1306,11 @@ function smartText(m: NonNullable<ExplainerSpec["smart"]>): string {
   return `✦ Smart: ${parts.join(" · ") || "written as Interactive"}`;
 }
 
-/** Review rounds (server/explainer/deepen.py): Interactive with rounds goes as quality-deep; other modes keep their own mode. */
-/** The request options for the composer's choices (mode, review rounds, effort, level, thinking, page colours). */
-function optionsOf(s: ComposerChoices): Pick<GenerateRequest, "quality" | "reviewRounds" | "effort" | "interactivity" | "level" | "planThinking" | "colorMode"> {
-  // Code Lab 2.0 to 7.0 and Explorer always say whether to think before planning (the Options' Thinking switch).
-  const thinking = s.quality === "code-lab-2" || s.quality === "code-lab-3" || s.quality === "code-lab-7" || s.quality === "playground" || s.quality === "playground-2" ? { planThinking: s.planThinking } : {};
-  return { ...modeOf(s), effort: s.effort, interactivity: s.interactivity, level: s.level, ...thinking, colorMode: s.colorMode };
-}
-
-function modeOf(s: ComposerChoices): Pick<GenerateRequest, "quality" | "reviewRounds"> {
-  if (s.reviewRounds <= 0) return { quality: s.quality };
-  return { quality: s.quality === "quality-plus" ? "quality-deep" : s.quality, reviewRounds: s.reviewRounds };
+/** The request options for the composer's choices (mode, effort, level, thinking, page colours). */
+function optionsOf(s: ComposerChoices): Pick<GenerateRequest, "quality" | "effort" | "interactivity" | "level" | "planThinking" | "colorMode"> {
+  // Explorer always says whether to think before planning (the Options' Thinking switch).
+  const thinking = s.quality === "playground" ? { planThinking: s.planThinking } : {};
+  return { quality: s.quality, effort: s.effort, interactivity: s.interactivity, level: s.level, ...thinking, colorMode: s.colorMode };
 }
 
 /** Copies `text` right away, inside the click (navigator.clipboard can wait on a permission prompt). False if the browser refused. */
@@ -1437,6 +1327,17 @@ function copyNow(text: string): boolean {
   return ok;
 }
 
+/** The JSON object after `prefix` in a generation's end message (ANSWER_PREFIX, NEW_TOPIC_BRIEF_PREFIX), with a reply. */
+function jsonAfter(message: string, prefix: string): { reply: string; offer?: unknown; brief?: unknown } | null {
+  if (!message.startsWith(prefix)) return null;
+  try {
+    const o = JSON.parse(message.slice(prefix.length));
+    return o && typeof o === "object" && typeof o.reply === "string" ? o : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A typed prompt as a conversation title. */
 function clip(text: string): string {
   return text.length > 60 ? text.slice(0, 57) + "…" : text;
@@ -1445,8 +1346,8 @@ function clip(text: string): string {
 /** `req` with an edited prompt (a concept's text, a paper's note). A revise follow-up drops its section pick, made for the old text. */
 function withPromptText(req: GenerateRequest, text: string): GenerateRequest {
   const out: GenerateRequest = req.mode === "concept" ? { ...req, text } : { ...req, note: text };
-  if (out.followUp?.kind === "revise" && (out.followUp.pick || out.followUp.plan)) {
-    const { pick: _old, plan: _oldPlan, ...f } = out.followUp;
+  if (out.followUp?.kind === "revise" && out.followUp.plan) {
+    const { plan: _oldPlan, ...f } = out.followUp;
     out.followUp = f;
   }
   return out;
@@ -1456,10 +1357,6 @@ function withPromptText(req: GenerateRequest, text: string): GenerateRequest {
 function resultMeta(rec: ExplainerRecord): string {
   const u = rec.usage!;
   const parts = [modeName(u.quality) ?? u.quality];
-  if (u.quality === "quality-deep" || rec.request.reviewRounds) {
-    const n = rec.request.reviewRounds;
-    parts.push(!n ? "review rounds" : n >= 10 ? "review until clean" : `up to ${n} review round${n === 1 ? "" : "s"}`);
-  }
   if (u.effort === "low" || u.effort === "high") parts.push(`${u.effort} effort`);
   if (rec.request.interactivity && rec.request.interactivity !== "balanced") parts.push(rec.request.interactivity === "reading" ? "mostly reading" : "hands-on");
   if (rec.request.level && rec.request.level !== "auto") parts.push(LEVEL_CHOICES[rec.request.level].split(":")[0].toLowerCase());
@@ -1487,4 +1384,17 @@ function toast(msg: string) {
   const t = h("div.toast.shell", { role: "status" }, msg);
   document.body.append(t);
   setTimeout(() => t.remove(), 4000);
+}
+
+/** Follow-ups v4: the question in an Asked message (ASKED_PREFIX + {text, question: {text, options: [label]}}), as the plan
+ * step's ask; undefined when it can't be read. Keep in step with history._asked on the server. */
+function askedOf(message: string): { text: string; options: PlanOption[] } | undefined {
+  try {
+    const q = JSON.parse(message.slice(ASKED_PREFIX.length)) as { question?: { text?: unknown; options?: unknown } };
+    const options = Array.isArray(q.question?.options) ? q.question!.options.filter((o): o is string => typeof o === "string" && !!o.trim()) : [];
+    if (typeof q.question?.text !== "string" || options.length < 2) return undefined;
+    return { text: q.question.text, options: options.map((label) => ({ label, sections: [], steps: [] })) };
+  } catch {
+    return undefined;
+  }
 }

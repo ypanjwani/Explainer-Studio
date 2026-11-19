@@ -47,11 +47,30 @@ FACTCHECK_SECTIONS = os.environ.get("FACTCHECK_SECTIONS") == "1"
 Emit = Callable[[dict], None]
 
 
-def _step(emit: Emit, step: str, status: str, detail: str | None = None) -> None:
+def _step(emit: Emit, step: str, status: str, detail: str | None = None, preview: dict | None = None) -> None:
+    """preview: what the app's locked card can show early (title/subtitle after the plan, icons/theme after the design)."""
     e = {"type": "step", "step": step, "status": status}
     if detail:
         e["detail"] = detail
+    if preview:
+        e["preview"] = preview
     emit(e)
+
+
+def plan_preview(outline: dict) -> dict:
+    """The locked card's title and subtitle, known once the plan is written."""
+    return {"title": js_slice(str(outline.get("title") or ""), 0, 200), "subtitle": js_slice(str(outline.get("subtitle") or ""), 0, 300)}
+
+
+def design_preview(design: dict | None) -> dict | None:
+    """The locked card's theme and stage icons, known once the design is chosen."""
+    if not design:
+        return None
+    menu = data.menu("ICONS")
+    out: dict = {"theme": design.get("theme"), "icons": [menu[s["icon"]] for s in design.get("stageIcons") or [] if s.get("icon") in menu][:12]}
+    if design.get("accent"):
+        out["accent"] = design["accent"]
+    return out
 
 
 def _prompt(name: str) -> str:
@@ -383,27 +402,12 @@ def section_tools(extras: list[str] | None) -> list[str]:
     return ["search"] if "search" in e or "auto" in e else []
 
 
-# Saved preferences (copied from feedback.prefs_hint, whose module also imports other modes' code).
-PREF_MAX = 200
-MAX_ACTIVE_PREFS = 8
-
-
-def prefs_hint(prefs: Any) -> str:
-    """The planner's note for a reader with saved preferences; "" without any (the request is then unchanged)."""
-    prefs = [p for p in prefs if isinstance(p, str) and p.strip()] if isinstance(prefs, list) else []
-    if not prefs:
-        return ""
-    lines = "\n".join(f"- {js_slice(' '.join(p.split()), 0, PREF_MAX)}" for p in prefs[:MAX_ACTIVE_PREFS])
-    return ("This reader's saved preferences (follow them where they fit this topic; the rules above always come first):\n"
-            f"{lines}")
-
-
 # ---------- one run: the parts both modes share ----------
 
 
 def planner_hint(req: dict, follow: dict | None, early_warnings: list[str], interactivity: bool) -> str:
     """The lines added to the planner's request: How hands-on (not for Reader), worked examples, a Retry's old titles,
-    a stage count the reader typed, and saved preferences."""
+    a stage count the reader typed."""
     # A stage count the reader typed ("14 stages") beats the prompt's 4-8 default.
     asked = requested_stages(req["note"] if req["mode"] == "paper" else req["text"])
     if asked and asked["clamped"]:
@@ -413,7 +417,6 @@ def planner_hint(req: dict, follow: dict | None, early_warnings: list[str], inte
         extras_hint(req.get("extras")),
         avoid_hint(req.get("avoid")),
         f"The reader asked for {asked['count']} stages: write exactly {asked['count']}." if asked else "",
-        "" if follow and follow.get("feedback") else prefs_hint(req.get("prefs")),
     ] if x)
 
 
@@ -512,7 +515,8 @@ def finish_spec(client: anthropic.Anthropic, req: dict, follow: dict | None, out
         d = design or default_design(outline)
         design = {**d, "theme": other_theme(d["theme"], req["avoid"])}
     jev_pick = " (Jev)" if brief and (brief.get("theme") or brief.get("fontPairing")) else ""
-    _step(emit, "design", "done", f"{design['theme']} · {design['fontPairing']}{jev_pick}" if design else "default design")
+    _step(emit, "design", "done", f"{design['theme']} · {design['fontPairing']}{jev_pick}" if design else "default design",
+          design_preview(design or default_design(outline)))
 
     _step(emit, "build", "running")
     context = js_slice(f"{outline_context(outline)}\n\nSource material:\n{source_context}", 0, CONTEXT_CHARS)

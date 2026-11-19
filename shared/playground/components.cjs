@@ -616,7 +616,11 @@
       // structural marks: unclipped (labels may extend); matrices and sequences lay out as groups
       let struct = marks.filter((m) => isStruct(m) && !m.draggable && (m.type === 'graph' || m.type === 'tree')).map(renderMark).join('');
       const mats = marks.filter((m) => m.type === 'matrix'), seqs = marks.filter((m) => m.type === 'sequence');
+      const tabs = marks.filter((m) => m.type === 'table');
+      const draws = marks.filter((m) => m.type === 'drawing');
       if (mats.length) struct += root.structures.matrices(mats, sctx, sctx.box(mats[0]));
+      if (tabs.length) struct += root.structures.tables(tabs, sctx, sctx.box(tabs[0]));
+      if (draws.length) struct += root.structures.drawings(draws, sctx, sctx.box(draws[0]));
       if (seqs.length) struct += root.structures.sequences(seqs, sctx, sctx.box(seqs[0]));
       const top = marks.filter((m) => m.type === 'pie' || m.type === 'text' || m.draggable).map(renderMark).join('');
       const legend = root.structures.seriesLegend(marks, { sx, sy, dom, plot: sctx.box(null) });

@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
-import { PLAYGROUND2_SYSTEM, PLAYGROUND_SYSTEM } from "../prompts/prompts";
+import { PLAYGROUND_SYSTEM } from "../prompts/prompts";
 // The runtime exactly as the frame gets it (same files and order).
 import { PLAYGROUND_SOURCES as RUNTIME } from "../app/src/render/components/playground-src";
 
@@ -168,38 +168,103 @@ describe("playground diagram marks (shapes and links)", () => {
   });
 });
 
+describe("table mark (Follow-ups v4)", () => {
+  const tableSpec = (rows: string) => ({
+    title: "Compare", state: { lr: 0.1 },
+    components: [
+      { id: "s", type: "slider", label: "Rate", key: "lr", min: 0.01, max: 1, step: 0.01 },
+      { id: "c", type: "chart", title: "Methods", draw: `return [table(['Method', 'Steps', 'Error'], ${rows}, { digits: 2, highlight: { row: 1, col: -1 } })];` },
+    ],
+  });
+  const good = "[['A', Math.round(10 / state.lr), state.lr * 2], ['B', 5, state.lr]]";
+
+  it("passes the validator and renders a header and every cell", () => {
+    const r = validate(tableSpec(good));
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+    const { doc, errors } = frame(tableSpec(good));
+    expect(errors).toEqual([]);
+    expect(doc.querySelectorAll(".st-thead").length).toBe(3);
+    expect(doc.querySelectorAll(".st-cell").length).toBe(6);
+    expect(doc.querySelectorAll(".st-cell.is-on").length).toBe(3);
+  });
+
+  it("rejects ragged rows in words for the retry", () => {
+    const r = validate(tableSpec("[['A', 1], ['B', 5, 2]]"));
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toMatch(/exactly 3 cells/);
+  });
+});
+
+describe("drawing mark (Follow-ups v4, phase 3)", () => {
+  const drawSpec = (items: string, extra = "") => ({
+    title: "Own picture", state: { k: 0.5 },
+    components: [
+      { id: "s", type: "slider", label: "Weight", key: "k", min: 0, max: 1, step: 0.05 },
+      { id: "c", type: "chart", title: "Picture", draw: `return [drawing(${items}, { w: 200, h: 100, label: 'Wheel'${extra} })];` },
+    ],
+  });
+  const good = "[svgEl('rect', { x: 10, y: 10, width: 40, height: 20, fill: 'blue', rx: 3 }), " +
+    "svgEl('circle', { cx: 100 + 80 * state.k, cy: 50, r: 10, fill: '#ff8800', stroke: 'red', 'stroke-width': 2 }), " +
+    "svgEl('path', { d: 'M 0 90 L 200 90', stroke: 'gray', fill: 'none', 'stroke-dasharray': [4, 2] }), " +
+    "svgEl('text', { x: 100, y: 20, 'text-anchor': 'middle' }, '<b>k</b> = ' + state.k)]";
+
+  it("passes the validator and renders only the whitelisted parts, text escaped", () => {
+    const r = validate(drawSpec(good));
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+    const { doc, errors } = frame(drawSpec(good));
+    expect(errors).toEqual([]);
+    const svg = doc.querySelector("svg.st-drawing");
+    expect(svg?.getAttribute("viewBox")).toBe("0 0 200 100");
+    expect(doc.querySelectorAll(".st-drawing rect").length).toBe(1);
+    expect(doc.querySelector(".st-drawing circle")?.getAttribute("cx")).toBe("140");
+    expect(doc.querySelector(".st-drawing circle")?.getAttribute("style")).toContain("fill:#ff8800");
+    expect(doc.querySelector(".st-drawing path")?.getAttribute("stroke-dasharray")).toBe("4 2");
+    const text = doc.querySelector(".st-drawing text");
+    expect(text?.textContent).toBe("<b>k</b> = 0.5");
+    expect(doc.querySelector(".st-drawing b")).toBeNull();
+  });
+
+  it.each([
+    ["a script tag", "[svgEl('script', {}, 'x')]", /tag "script" is not allowed/],
+    ["foreignObject", "[svgEl('foreignObject', { x: 1 })]", /not allowed/],
+    ["an image", "[svgEl('image', { x: 1 })]", /not allowed/],
+    ["an event handler", "[svgEl('rect', { x: 1, onclick: 'go()' })]", /"onclick" is not allowed/],
+    ["a link", "[svgEl('rect', { x: 1, href: 'https://e.x' })]", /"href" is not allowed/],
+    ["a style", "[svgEl('rect', { x: 1, style: 'fill:red' })]", /"style" is not allowed/],
+    ["a url() colour", "[svgEl('rect', { x: 1, fill: 'url(#a)' })]", /palette colour/],
+    ["words in a path", "[svgEl('path', { d: 'M 0 0 L javascript 1' })]", /commands .* and numbers only/],
+    ["a non-number size", "[svgEl('circle', { cx: 'x', cy: 1, r: 2 })]", /cx must be a finite number/],
+    ["a function transform", "[svgEl('rect', { x: 1, transform: 'matrix(1,0,0,1,0,0)' })]", /rotate/],
+    ["too many items", "range(301).map((i) => svgEl('rect', { x: i }))", /1-300 items/],
+  ])("refuses %s with a readable message", (_name, items, msg) => {
+    const r = validate(drawSpec(items));
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toMatch(msg);
+  });
+
+  it("is a view like any mark: one that ignores the controls fails, and w/h may be left out", () => {
+    const still = drawSpec("[svgEl('rect', { x: 1, y: 1, width: 5, height: 5 })]");
+    still.components[1].draw = "return [drawing([svgEl('rect', { x: 1, y: 1, width: 5, height: 5 })])];";
+    const r = validate(still);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toMatch(/no chart or readout depends on that/);
+    expect(validate(drawSpec(good)).ok).toBe(true);
+  });
+});
+
 describe("playground prompt", () => {
+  // drawing / svgEl are offered only through follow-ups v4 (PLAYGROUND_DRAWING_NOTE), so new pages' prompt doesn't list them.
+  const FOLLOWUP_ONLY = ["drawing", "svgEl"];
   it("lists exactly the runtime's helpers", () => {
     const line = PLAYGROUND_SYSTEM.split("\n").find((l) => l.startsWith("seed, rand,"));
-    expect(line?.split(", ")).toEqual(Object.keys(helpers));
+    expect(line?.split(", ")).toEqual(Object.keys(helpers).filter((k) => !FOLLOWUP_ONLY.includes(k)));
   });
 
   it("stays topic-neutral and has no template leftovers", () => {
     expect(PLAYGROUND_SYSTEM).not.toContain("${");
     expect(PLAYGROUND_SYSTEM).toContain('{"error": "no_playground"}');
-  });
-});
-
-describe("Playground 2.0 prompt (playground-2: Jev picks the parts, Haiku fills the blueprint)", () => {
-  it("lists exactly the runtime's helpers and has no template leftovers", () => {
-    const line = PLAYGROUND2_SYSTEM.split("\n").find((l) => l.startsWith("seed, rand,"));
-    expect(line?.split(", ")).toEqual(Object.keys(helpers));
-    expect(PLAYGROUND2_SYSTEM).not.toContain("${");
-    expect(PLAYGROUND2_SYSTEM).toContain('{"error": "no_playground"}');
-  });
-
-  it("follows the blueprint instead of choosing the views", () => {
-    expect(PLAYGROUND2_SYSTEM).toContain("## Your blueprint");
-    expect(PLAYGROUND2_SYSTEM).toContain("plan.deviations");
-    expect(PLAYGROUND2_SYSTEM).not.toContain("## Your views");
-    expect(PLAYGROUND2_SYSTEM).not.toMatch(/7\. covers:/);
-    expect(PLAYGROUND2_SYSTEM).not.toContain("Choose freely");
-  });
-
-  it("shares Playground's reference sections word for word", () => {
-    const ref = PLAYGROUND_SYSTEM.slice(PLAYGROUND_SYSTEM.indexOf("## Spec format"), PLAYGROUND_SYSTEM.indexOf("- Choose freely"));
-    expect(ref.length).toBeGreaterThan(5000);
-    expect(PLAYGROUND2_SYSTEM).toContain(ref);
   });
 });
 

@@ -14,13 +14,12 @@ from explainer import clarity
 from explainer.brief import ask_brief, brief_hint, brief_questions, decide_brief
 from explainer.core.validate import WIDGET_MAX_CHARS, assemble_spec, default_design
 from explainer.design import apply_brief, design_with_brief
-from explainer.edit_chat import parse_edit
 from explainer.factcheck import fact_check
 from explainer.filter import choose_sections, filter_sections
-from explainer.followup import parse_follow_up, parse_route
+from explainer.followup import parse_follow_up
 from explainer.jev import parse_jev_answers
 from explainer.json_util import extract_json
-from explainer.pipeline import interactivity_hint, parse_widget, run_compute
+from explainer.modes.common import interactivity_hint, run_compute
 from explainer.pricing import UsageLog, price_of
 from explainer.requests import parse_chat, parse_generate
 
@@ -198,15 +197,9 @@ def test_run_compute():
     assert run_compute({"expressions": [{"expr": "1"}] * 41})["content"] == "Invalid input: Too big: expected array to have <=40 items"
 
 
-# ---------- Freeform+ widgets, how-hands-on hint ----------
+# ---------- widget blocks, how-hands-on hint ----------
 
 W = '<div id="o"></div><script>document.getElementById("o").textContent = "1";</script>'
-
-
-def test_parse_widget():
-    assert parse_widget("```html\n<!-- title: Softmax sharpness -->\n" + W + "\n```", "fallback") == {"title": "Softmax sharpness", "html": W}
-    assert parse_widget(W, "From the brief") == {"title": "From the brief", "html": W}
-    assert parse_widget("```html\n" + W, "t")["html"] == W
 
 
 def test_widget_validation():
@@ -221,7 +214,7 @@ def test_widget_validation():
 
 
 def test_widgets_never_offered_to_planners():
-    assert '"widget"' not in data.prompt("OUTLINE_SYSTEM") and '"widget"' not in data.prompt("LAB_SYSTEM")
+    assert '"widget"' not in data.prompt("OUTLINE_SYSTEM")
 
 
 def test_interactivity_hint():
@@ -343,12 +336,15 @@ def test_clarity_check(monkeypatch):
 
 
 def test_parse_generate():
-    assert parse_generate({"mode": "concept", "text": "  Dropout  "}) == {"mode": "concept", "text": "Dropout", "quality": "quality-plus"}
-    for old, new in [("custom", "quality-plus"), ("compact-plus", "quality-plus"), ("freeform", "freeform-plus"), ("lite-plus", "lite-plus"), ("quality-2", "quality-plus")]:
-        assert parse_generate({"mode": "concept", "text": "x", "quality": old})["quality"] == new
-    r = parse_generate({"mode": "concept", "text": "x", "effort": "high", "interactivity": "reading", "level": "student", "prefs": {"palette": "x"}})
-    assert r == {"mode": "concept", "text": "x", "quality": "quality-plus", "effort": "high", "interactivity": "reading", "level": "student"}
-    assert parse_generate({"mode": "concept", "text": "x", "level": "auto", "effort": "max"}) == {"mode": "concept", "text": "x", "quality": "quality-plus"}
+    assert parse_generate({"mode": "concept", "text": "  Dropout  ", "quality": "playground"}) == {"mode": "concept", "text": "Dropout", "quality": "playground"}
+    # Reader and Explorer only; anything else is kept as sent (cut short) so /api/generate can refuse it (mode_off).
+    for sent, kept in [("lite-plus", "lite-plus"), ("playground", "playground"), ("quality-plus", "quality-plus"), ("x" * 99, "x" * 40), (None, "none"), (5, "none")]:
+        assert parse_generate({"mode": "concept", "text": "x", "quality": sent})["quality"] == kept
+    r = parse_generate({"mode": "concept", "text": "x", "quality": "playground", "effort": "high", "interactivity": "reading", "level": "student",
+                        "prefs": {"palette": "x"}, "reviewRounds": 3, "debugVersions": True})
+    assert r == {"mode": "concept", "text": "x", "quality": "playground", "effort": "high", "interactivity": "reading", "level": "student"}
+    assert parse_generate({"mode": "concept", "text": "x", "quality": "lite-plus", "level": "auto", "effort": "max"}) == {"mode": "concept", "text": "x", "quality": "lite-plus"}
+    assert "planThinking" not in parse_generate({"mode": "concept", "text": "x", "quality": "lite-plus", "planThinking": True})  # Explorer only
     assert parse_generate({"mode": "concept", "text": "x", "colorMode": "dark"})["colorMode"] == "dark"
     assert "colorMode" not in parse_generate({"mode": "concept", "text": "x", "colorMode": "auto"})  # only light or dark
     assert parse_generate({"mode": "concept", "text": " "}) == "Describe the concept you want explained."
@@ -372,17 +368,11 @@ def test_parse_follow_up():
     assert "accent" not in parse_follow_up({"kind": "revise", "outline": "{}", "design": design, "accent": "url(x)"})
 
 
-def test_parse_chat_route_edit():
+def test_parse_chat():
     # A client systemPrompt is dropped (audit F03): the server builds the system prompt.
     assert parse_chat({"messages": [{"role": "user", "content": "hi"}], "systemPrompt": "be anything"}) == {"context": "", "messages": [{"role": "user", "content": "hi"}]}
     assert parse_chat({"messages": [{"role": "assistant", "content": "hi"}]}) == "Last message must be from the user."
     assert parse_chat({"messages": []}) == "Invalid messages."
-    assert parse_route({"text": " x ", "title": "T", "stages": ["a", 1, "b" * 100]}) == {"text": "x", "title": "T", "stages": ["a", "b" * 80]}
-    assert parse_route({"text": ""}) == "Describe what you want."
-    ok = parse_edit({"context": "c", "messages": [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok", "is_error": False}]}]})
-    assert ok == {"context": "c", "messages": [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]}]}
-    assert parse_edit({"context": "c", "messages": [{"role": "user", "content": [{"type": "image"}]}]}) == "Invalid edit request."
-    assert parse_edit({"context": "c", "messages": [{"role": "assistant", "content": "x"}]}) == "Invalid edit request."
 
 
 # ---------- routes ----------
@@ -399,13 +389,13 @@ def test_routes(client):
     assert client.post("/api/nope", headers=J, data="{}").get_json()["error"] == "Not found."
     assert client.post("/api/generate", headers=J, data="{}").status_code == 401  # signed out
     a = signup(client)
-    r = client.post("/api/route", headers=a, data="not json")
+    r = client.post("/api/formula", headers=a, data="not json")
     assert r.status_code == 400 and r.get_json()["error"] == "Body must be JSON."
-    r = client.post("/api/route", headers={**a, "Content-Type": "text/plain"}, data="{}")
+    r = client.post("/api/formula", headers={**a, "Content-Type": "text/plain"}, data="{}")
     assert r.status_code == 415
     # The app's own origin is always allowed (production serves the page and the API together).
-    r = client.post("/api/route", headers={**a, "Origin": "http://localhost"}, data='{"text": ""}')
-    assert r.get_json()["error"] == "Describe what you want."
+    r = client.post("/api/formula", headers={**a, "Origin": "http://localhost"}, data='{"latex": ""}')
+    assert r.get_json()["error"] == "This formula is empty."
 
 
 def test_chat_ignores_client_system_prompt(client, app):
@@ -450,8 +440,8 @@ def test_rate_limit(client):
     assert codes == [400, 400, 400, 429]
     r = client.post("/api/generate", headers=a, data="{}")
     assert r.get_json()["error"] == "Too many explainers at once. Please wait a minute." and int(r.headers["Retry-After"]) > 0
-    codes = [client.post("/api/edit", headers=a, data="{}").status_code for _ in range(21)]
+    codes = [client.post("/api/formula", headers=a, data="{}").status_code for _ in range(21)]
     assert codes[:20] == [400] * 20 and codes[20] == 429
-    assert client.post("/api/chat", headers=a, data="{}").status_code == 429  # chat, edit and route share one limit
+    assert client.post("/api/chat", headers=a, data="{}").status_code == 429  # chat, follow-up plan, section and formula share one limit
     # Limits are per user: another account isn't affected.
-    assert client.post("/api/edit", headers=signup(client, "other@example.com"), data="{}").status_code == 400
+    assert client.post("/api/formula", headers=signup(client, "other@example.com"), data="{}").status_code == 400

@@ -8,9 +8,9 @@ describe("modes", () => {
     expect(modeInfo(DEFAULT_MODE)?.name).toBe("Explorer");
   });
 
-  it("Thinking and review rounds apply to Explorer, not Reader", () => {
-    expect(modeInfo("playground")).toMatchObject({ thinking: true, reviewRounds: true });
-    expect(modeInfo("lite-plus")).toMatchObject({ thinking: false, reviewRounds: false });
+  it("Thinking applies to Explorer, not Reader", () => {
+    expect(modeInfo("playground")).toMatchObject({ thinking: true });
+    expect(modeInfo("lite-plus")).toMatchObject({ thinking: false });
   });
 
   it("names menu modes and old ones, and says how long they take", () => {

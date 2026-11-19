@@ -5,8 +5,9 @@
 //
 //   node scripts/followup-live.mjs --base playground-low-1 --quality playground --effort low --name pg-chart "Let me change the number of keys in the d_k chart"
 //
-// --plan: follow-ups v3 (server/explainer/modes/followup/understand.py, steps.py; on unless the API has FOLLOWUP_PLAN=0): ask /api/followup/plan first, print the
-// plan (or the question / refusal / answer), and build with its steps as FollowUp.plan. A question or refusal stops there.
+// Like the app (follow-ups v3, server/explainer/modes/followup/): asks /api/followup/plan first, prints the plan (or the
+// question / refusal / answer), and builds with its steps as FollowUp.plan. A question or refusal stops there. (--plan is
+// accepted for old command lines; the plan step always runs, since the server runs a revise follow-up only with a plan.)
 //
 // Output: .variety/followup/<name>.json ({spec, usage, request, base, plan}).
 
@@ -17,11 +18,10 @@ const API = process.env.API ?? "http://localhost:8787";
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(`--${k}`); return i >= 0 ? args.splice(i, 2)[1] : d; };
 const base = opt("base", "playground-low-1");
-const quality = opt("quality", "quality-plus");
+const quality = opt("quality", "playground");
 const effort = opt("effort", "low");
 const name = opt("name", `${base}-${Date.now().toString(36)}`);
-const usePlan = args.includes("--plan");
-if (usePlan) args.splice(args.indexOf("--plan"), 1);
+if (args.includes("--plan")) args.splice(args.indexOf("--plan"), 1);
 const text = args.join(" ");
 if (!text) { console.error("Give the follow-up request as the last argument."); process.exit(1); }
 
@@ -49,7 +49,7 @@ const token = (await auth.json()).accessToken;
 
 const t0 = Date.now();
 let plan = null;
-if (usePlan) {
+{
   const r = await fetch(`${API}/api/followup/plan`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Origin: "http://localhost:5173", Authorization: `Bearer ${token}` },
@@ -60,7 +60,7 @@ if (usePlan) {
   if (plan.kind === "change") {
     plan.summary.forEach((l) => console.log(`  - ${l}`));
     if (plan.confirm) console.log("  (the app would ask the reader to confirm this plan)");
-    followUp.plan = { sections: plan.sections, steps: plan.steps };
+    followUp.plan = { sections: plan.sections, steps: plan.steps, ...(plan.v4 ? { v4: plan.v4 } : {}), ...(plan.v5 ? { v5: plan.v5 } : {}) };
   } else {
     console.log(`  ${JSON.stringify(plan.question ?? plan.reason ?? plan.answer ?? plan.error ?? plan, null, 1)}`);
     process.exit(0);
@@ -69,7 +69,7 @@ if (usePlan) {
 const res = await fetch(`${API}/api/generate`, {
   method: "POST",
   headers: { "Content-Type": "application/json", Origin: "http://localhost:5173", Authorization: `Bearer ${token}` },
-  body: JSON.stringify({ mode: "concept", text, quality, effort, followUp, ...(quality.startsWith("code-lab") || quality.startsWith("playground") ? { debugRejected: true } : {}) }),
+  body: JSON.stringify({ mode: "concept", text, quality, effort, followUp, ...(quality === "playground" ? { debugRejected: true } : {}) }),
 });
 if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
 const events = (await res.text()).split("\n").filter((l) => l.startsWith("data: ")).map((l) => JSON.parse(l.slice(6)));
